@@ -25,6 +25,7 @@ export type {CartMembershipDecision, CartMembershipSnapshot} from './evaluateCar
 export {isCartCandidate} from './isCartCandidate'
 export type {CartCandidateInput} from './isCartCandidate'
 export {revalidateCartOnBoot} from './revalidateCartOnBoot'
+export type {RevalidateCartOnBootOptions} from './revalidateCartOnBoot'
 export type {BatchPublishPluginConfig, CartItem} from './types'
 export {useCart} from './useCart'
 

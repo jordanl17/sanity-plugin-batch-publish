@@ -14,6 +14,20 @@ interface Subscribable<T> {
 }
 
 /**
+ * Options for `revalidateCartOnBoot`.
+ *
+ * @public
+ */
+export interface RevalidateCartOnBootOptions {
+  /**
+   * Per-item bound, in milliseconds, for awaiting the first ready editState
+   * emission before treating the read as non-confident (and keeping the item).
+   * Defaults to a few seconds; exposed mainly so tests can run fast.
+   */
+  readTimeoutMs?: number
+}
+
+/**
  * Minimal interface for the document store used by the boot sweep.
  *
  * @internal
@@ -25,31 +39,65 @@ interface DocumentStoreLike {
 }
 
 /**
- * Reads the first emission from an editState observable. If it is `ready === true`,
- * resolves with it. If no synchronous emission arrives, or the first emission is not
- * ready, or the subscription throws, resolves with `null` (transient-failure guard —
- * the caller treats null as `definitive: false`, keeping the item).
+ * Default bound, in milliseconds, for awaiting a single item's first ready
+ * editState emission before giving up and treating the read as non-confident.
  *
- * Always unsubscribes after the first emission or on error.
+ * @internal
+ */
+const DEFAULT_READ_TIMEOUT_MS = 4000
+
+/**
+ * Awaits the first `ready === true` emission from an editState observable.
+ *
+ * The real `documentStore.pair.editState` observable fetches draft + published from
+ * the server and emits its ready state asynchronously, so this subscribes and waits
+ * (up to `timeoutMs`) for the first ready emission rather than reading synchronously.
+ *
+ * Resolves with the ready editState on success. Resolves with `null` — a
+ * non-confident read — when the timeout elapses before any ready emission, or when
+ * the subscription throws. The caller treats `null` as `definitive: false`, keeping
+ * the item (transient-failure guard).
+ *
+ * Always unsubscribes: on the ready emission, on timeout, and on error.
  */
 function readFirstReadyEditState(
   observable: Subscribable<EditStateSnapshot>,
+  timeoutMs: number,
 ): Promise<EditStateSnapshot | null> {
   return new Promise((resolve) => {
-    const collectedStates: EditStateSnapshot[] = []
+    let settled = false
+    let subscription: {unsubscribe(): void} | null = null
+    let timer: ReturnType<typeof setTimeout> | null = null
+
+    const finish = (result: EditStateSnapshot | null) => {
+      if (settled) {
+        return
+      }
+      settled = true
+      if (timer !== null) {
+        clearTimeout(timer)
+      }
+      // A synchronous ready emission settles before `subscribe` returns, so the
+      // subscription is unsubscribed by the post-subscribe guard below instead.
+      if (subscription !== null) {
+        subscription.unsubscribe()
+      }
+      resolve(result)
+    }
+
+    timer = setTimeout(() => finish(null), timeoutMs)
 
     try {
-      const subscription = observable.subscribe((editState) => {
-        collectedStates.push(editState)
+      subscription = observable.subscribe((editState) => {
+        if (editState.ready) {
+          finish(editState)
+        }
       })
-      // Unsubscribe after processing synchronous emissions
-      subscription.unsubscribe()
-
-      const readyState = collectedStates.find((state) => state.ready) ?? null
-      resolve(readyState)
+      if (settled) {
+        subscription.unsubscribe()
+      }
     } catch {
-      // Subscription threw — transient failure; keep the item
-      resolve(null)
+      finish(null)
     }
   })
 }
@@ -64,6 +112,7 @@ async function processItem(
   documentStore: DocumentStoreLike,
   cartStore: CartStore,
   config: BatchPublishPluginConfig | undefined,
+  timeoutMs: number,
 ): Promise<void> {
   const editStateFn = documentStore.pair?.editState
   if (editStateFn === undefined || editStateFn === null) {
@@ -72,7 +121,7 @@ async function processItem(
 
   const observable = editStateFn(item.publishedId, item.documentType)
 
-  const editState = await readFirstReadyEditState(observable).catch(() => null)
+  const editState = await readFirstReadyEditState(observable, timeoutMs).catch(() => null)
 
   const resolvedEditState: EditStateSnapshot =
     editState !== null
@@ -113,6 +162,7 @@ export async function revalidateCartOnBoot(
   cartStore: CartStore,
   items: CartItem[],
   config?: BatchPublishPluginConfig,
+  options?: RevalidateCartOnBootOptions,
 ): Promise<void> {
   if (items.length === 0) {
     return
@@ -123,5 +173,9 @@ export async function revalidateCartOnBoot(
     return
   }
 
-  await Promise.all(items.map((item) => processItem(item, documentStore, cartStore, config)))
+  const timeoutMs = options?.readTimeoutMs ?? DEFAULT_READ_TIMEOUT_MS
+
+  await Promise.all(
+    items.map((item) => processItem(item, documentStore, cartStore, config, timeoutMs)),
+  )
 }
