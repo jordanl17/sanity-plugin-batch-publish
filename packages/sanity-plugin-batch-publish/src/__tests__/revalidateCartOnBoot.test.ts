@@ -29,6 +29,28 @@ function makeSingleValueObservable<T>(value: T) {
 }
 
 /**
+ * Observable that emits a single value asynchronously (on a later macrotask) then
+ * completes. Models the real `editState` observable, which fetches draft+published
+ * from the server and emits its `ready: true` state on a later tick rather than
+ * synchronously inside `subscribe`.
+ */
+function makeAsyncSingleValueObservable<T>(value: T, delayMs = 0) {
+  const unsubscribeSpy = vi.fn()
+  return {
+    unsubscribeSpy,
+    subscribe(observer: (value: T) => void) {
+      const timer = setTimeout(() => observer(value), delayMs)
+      return {
+        unsubscribe() {
+          clearTimeout(timer)
+          unsubscribeSpy()
+        },
+      }
+    },
+  }
+}
+
+/**
  * Minimal observable that never emits (simulates a never-ready editState).
  */
 function makeNeverObservable<T>() {
@@ -366,7 +388,15 @@ describe('revalidateCartOnBoot', () => {
       },
     ])
 
-    await revalidateCartOnBoot(docStore as never, cartStore as never, cartStore.getItems())
+    await revalidateCartOnBoot(
+      docStore as never,
+      cartStore as never,
+      cartStore.getItems(),
+      undefined,
+      {
+        readTimeoutMs: 50,
+      },
+    )
 
     const removeCalls = (cartStore.applyDecision as ReturnType<typeof vi.fn>).mock.calls.filter(
       (args: unknown[]) => (args[0] as {action: string}).action === 'remove',
@@ -449,5 +479,158 @@ describe('revalidateCartOnBoot', () => {
     await revalidateCartOnBoot({} as never, cartStore as never, cartStore.getItems())
 
     expect(applyDecisionSpy).not.toHaveBeenCalled()
+  })
+})
+
+// ---- revalidateCartOnBoot async editState tests -----------------------------
+//
+// The real `documentStore.pair.editState` observable fetches draft + published
+// from the server and emits its `ready: true` state ASYNCHRONOUSLY, on a later
+// tick. These cases model that timing so the boot sweep is exercised the way it
+// behaves in a real studio - a synchronous-emitting double gave false confidence.
+
+describe('revalidateCartOnBoot (async editState emission)', () => {
+  it('drops a stale item that emits ready:true with draft=null on a later tick', async () => {
+    const publishedId = 'doc-async-stale'
+    const editState: EditStateShape = {
+      draft: null,
+      published: {_id: publishedId, _rev: 'pub-rev', _type: 'article'},
+      liveEditSchemaType: false,
+      ready: true,
+    }
+    const observable = makeAsyncSingleValueObservable(editState)
+    const docStore = {pair: {editState: vi.fn(() => observable)}}
+    const cartStore = makeCartStore([makeTrackedItem(publishedId)])
+
+    await revalidateCartOnBoot(docStore as never, cartStore as never, cartStore.getItems())
+
+    expect(cartStore.applyDecision).toHaveBeenCalledWith(
+      expect.objectContaining({action: 'remove', publishedId}),
+    )
+  })
+
+  it('drops a reverted item (draft matches published) emitted on a later tick', async () => {
+    const publishedId = 'doc-async-reverted'
+    const editState: EditStateShape = {
+      draft: {_id: `drafts.${publishedId}`, _rev: 'rev-1', _type: 'article', title: 'same'},
+      published: {_id: publishedId, _rev: 'pub-rev', _type: 'article', title: 'same'},
+      liveEditSchemaType: false,
+      ready: true,
+    }
+    const observable = makeAsyncSingleValueObservable(editState)
+    const docStore = {pair: {editState: vi.fn(() => observable)}}
+    const cartStore = makeCartStore([makeTrackedItem(publishedId)])
+
+    await revalidateCartOnBoot(docStore as never, cartStore as never, cartStore.getItems())
+
+    expect(cartStore.applyDecision).toHaveBeenCalledWith(
+      expect.objectContaining({action: 'remove', publishedId}),
+    )
+  })
+
+  it('keeps a still-qualifying item emitted on a later tick (no remove)', async () => {
+    const publishedId = 'doc-async-qualifying'
+    const editState: EditStateShape = {
+      draft: {
+        _id: `drafts.${publishedId}`,
+        _rev: 'rev-1',
+        _type: 'article',
+        title: 'different content',
+      },
+      published: null,
+      liveEditSchemaType: false,
+      ready: true,
+    }
+    const observable = makeAsyncSingleValueObservable(editState)
+    const docStore = {pair: {editState: vi.fn(() => observable)}}
+    const cartStore = makeCartStore([makeTrackedItem(publishedId)])
+
+    await revalidateCartOnBoot(docStore as never, cartStore as never, cartStore.getItems())
+
+    const removeCalls = (cartStore.applyDecision as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (args: unknown[]) => (args[0] as {action: string}).action === 'remove',
+    )
+    expect(removeCalls).toHaveLength(0)
+  })
+
+  it('keeps an item that only ever emits ready:false within the bounded wait (no remove)', async () => {
+    const publishedId = 'doc-async-not-ready'
+    const editState: EditStateShape = {
+      draft: null,
+      published: {_id: publishedId, _rev: 'pub-rev', _type: 'article'},
+      liveEditSchemaType: false,
+      ready: false,
+    }
+    const observable = makeAsyncSingleValueObservable(editState)
+    const docStore = {pair: {editState: vi.fn(() => observable)}}
+    const cartStore = makeCartStore([makeTrackedItem(publishedId)])
+
+    await revalidateCartOnBoot(
+      docStore as never,
+      cartStore as never,
+      cartStore.getItems(),
+      undefined,
+      {readTimeoutMs: 50},
+    )
+
+    const removeCalls = (cartStore.applyDecision as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (args: unknown[]) => (args[0] as {action: string}).action === 'remove',
+    )
+    expect(removeCalls).toHaveLength(0)
+  })
+
+  it('keeps an item whose editState never emits within the bounded wait (no remove)', async () => {
+    const publishedId = 'doc-async-never'
+    const neverObservable = makeNeverObservable<EditStateShape>()
+    const docStore = {pair: {editState: vi.fn(() => neverObservable)}}
+    const cartStore = makeCartStore([makeTrackedItem(publishedId)])
+
+    await revalidateCartOnBoot(
+      docStore as never,
+      cartStore as never,
+      cartStore.getItems(),
+      undefined,
+      {readTimeoutMs: 50},
+    )
+
+    const removeCalls = (cartStore.applyDecision as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (args: unknown[]) => (args[0] as {action: string}).action === 'remove',
+    )
+    expect(removeCalls).toHaveLength(0)
+  })
+
+  it('unsubscribes per item even with async emission timing', async () => {
+    const publishedIds = ['doc-async-1', 'doc-async-2', 'doc-async-3']
+    const observables = publishedIds.map((publishedId) => {
+      const editState: EditStateShape = {
+        draft: {
+          _id: `drafts.${publishedId}`,
+          _rev: 'rev-1',
+          _type: 'article',
+          title: 'different content',
+        },
+        published: null,
+        liveEditSchemaType: false,
+        ready: true,
+      }
+      return makeAsyncSingleValueObservable(editState)
+    })
+
+    let observableIndex = 0
+    const editStateSpy = vi.fn(() => {
+      const observable = observables[observableIndex]
+      observableIndex += 1
+      return observable
+    })
+    const docStore = {pair: {editState: editStateSpy}}
+    const items = publishedIds.map((publishedId) => makeTrackedItem(publishedId))
+    const cartStore = makeCartStore(items)
+
+    await revalidateCartOnBoot(docStore as never, cartStore as never, items)
+
+    expect(editStateSpy).toHaveBeenCalledTimes(3)
+    observables.forEach((observable) => {
+      expect(observable.unsubscribeSpy).toHaveBeenCalledTimes(1)
+    })
   })
 })
