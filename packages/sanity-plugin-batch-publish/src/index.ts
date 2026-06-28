@@ -1,7 +1,7 @@
 import {definePlugin} from 'sanity'
 
-import {makeCartBootRevalidator} from './CartBootRevalidator'
 import {makeCartDocumentObserver} from './CartDocumentObserver'
+import {makeCartStudioLayout} from './CartStudioLayout'
 import type {BatchPublishPluginConfig} from './types'
 
 export {
@@ -25,8 +25,9 @@ export {buildCartStorageKey, readCart, writeCart, subscribeToCartStorage} from '
 export {createCartStore} from './cartStore'
 export type {CartStore} from './cartStore'
 export {CartBootRevalidator, makeCartBootRevalidator} from './CartBootRevalidator'
-export {createCartRemoteWatcher} from './cartRemoteWatcher'
-export type {CartRemoteWatcherParams} from './cartRemoteWatcher'
+export {CartRemoteWatcher, makeCartRemoteWatcher} from './CartRemoteWatcher'
+export {createCartRemoteWatcher} from './createCartRemoteWatcher'
+export type {CartRemoteWatcherParams} from './createCartRemoteWatcher'
 export {CartDocumentObserver} from './CartDocumentObserver'
 export {evaluateCartMembership} from './evaluateCartMembership'
 export type {CartMembershipDecision, CartMembershipSnapshot} from './evaluateCartMembership'
@@ -48,7 +49,7 @@ export const batchPublish = definePlugin<BatchPublishPluginConfig | void>((confi
     },
     studio: {
       components: {
-        layout: makeCartBootRevalidator(config ?? undefined),
+        layout: makeCartStudioLayout(config ?? undefined),
       },
     },
   }

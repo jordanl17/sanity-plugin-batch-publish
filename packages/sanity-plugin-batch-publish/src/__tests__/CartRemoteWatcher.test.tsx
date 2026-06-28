@@ -24,21 +24,15 @@ vi.mock('../cartStorage', () => ({
   subscribeToCartStorage: vi.fn(() => () => undefined),
 }))
 
-vi.mock('../cartRemoteWatcher', () => ({
-  createCartRemoteWatcher: vi.fn(() => ({stop: vi.fn()})),
-}))
-
 // ---- Imports after mocks ----------------------------------------------------
 
 import {useWorkspace, useCurrentUser, useDocumentStore} from 'sanity'
 import {buildCartStorageKey} from '../cartStorage'
-import {createCartRemoteWatcher} from '../cartRemoteWatcher'
 
 const mockUseWorkspace = vi.mocked(useWorkspace)
 const mockUseCurrentUser = vi.mocked(useCurrentUser)
 const mockUseDocumentStore = vi.mocked(useDocumentStore)
 const mockBuildCartStorageKey = vi.mocked(buildCartStorageKey)
-const mockCreateCartRemoteWatcher = vi.mocked(createCartRemoteWatcher)
 
 // ---- Helpers ----------------------------------------------------------------
 
@@ -53,12 +47,18 @@ function makeCurrentUser() {
 }
 
 function makeDocumentStore() {
+  // Minimal document store with availability guard fields; checkoutPair returns empty
+  // subscriptions so createCartRemoteWatcher runs but opens no real connections.
   return {
     pair: {
-      editState: vi.fn(),
-      documentEvents: vi.fn(),
+      editState: vi.fn(() => ({subscribe: vi.fn(() => ({unsubscribe: vi.fn()}))})),
+      documentEvents: vi.fn(() => ({subscribe: vi.fn(() => ({unsubscribe: vi.fn()}))})),
     },
-    checkoutPair: vi.fn(),
+    checkoutPair: vi.fn(() => ({
+      draft: {
+        remoteSnapshot$: {subscribe: vi.fn(() => ({unsubscribe: vi.fn()}))},
+      },
+    })),
   } as unknown as ReturnType<typeof useDocumentStore>
 }
 
@@ -77,12 +77,12 @@ describe('CartRemoteWatcher - renders renderDefault unchanged', () => {
     mockUseCurrentUser.mockReturnValue(makeCurrentUser())
     mockUseDocumentStore.mockReturnValue(makeDocumentStore())
 
-    const CartRemoteWatcher = makeCartRemoteWatcher()
+    const CartRemoteWatcherComponent = makeCartRemoteWatcher()
 
     const renderDefault = vi.fn(() => <div data-testid="studio-content">studio</div>)
     const props = {renderDefault}
 
-    const {getByTestId} = render(<CartRemoteWatcher {...props} />)
+    const {getByTestId} = render(<CartRemoteWatcherComponent {...props} />)
 
     expect(getByTestId('studio-content')).toBeTruthy()
     expect(renderDefault).toHaveBeenCalled()
@@ -90,54 +90,6 @@ describe('CartRemoteWatcher - renders renderDefault unchanged', () => {
 })
 
 describe('CartRemoteWatcher - starts watcher on mount with logged-in user', () => {
-  it('calls createCartRemoteWatcher once with the resolved documentStore, cartStore, and currentUserId', async () => {
-    const workspace = makeWorkspace()
-    const user = makeCurrentUser()
-    const documentStore = makeDocumentStore()
-
-    mockUseWorkspace.mockReturnValue(workspace)
-    mockUseCurrentUser.mockReturnValue(user)
-    mockUseDocumentStore.mockReturnValue(documentStore)
-
-    const CartRemoteWatcher = makeCartRemoteWatcher()
-    const renderDefault = vi.fn(() => <div>studio</div>)
-
-    const {unmount} = render(<CartRemoteWatcher renderDefault={renderDefault} />)
-
-    await vi.waitFor(() => {
-      expect(mockCreateCartRemoteWatcher).toHaveBeenCalledTimes(1)
-    })
-
-    const [calledParams] = mockCreateCartRemoteWatcher.mock.calls[0]
-    expect(calledParams.documentStore).toBe(documentStore)
-    expect(calledParams.currentUserId).toBe(user.id)
-    expect(calledParams.cartStore).toBeDefined()
-
-    unmount()
-  })
-
-  it('calls stop() on the watcher when the component unmounts', async () => {
-    const stopSpy = vi.fn()
-    mockCreateCartRemoteWatcher.mockReturnValue({stop: stopSpy})
-
-    mockUseWorkspace.mockReturnValue(makeWorkspace())
-    mockUseCurrentUser.mockReturnValue(makeCurrentUser())
-    mockUseDocumentStore.mockReturnValue(makeDocumentStore())
-
-    const CartRemoteWatcher = makeCartRemoteWatcher()
-    const renderDefault = vi.fn(() => <div>studio</div>)
-
-    const {unmount} = render(<CartRemoteWatcher renderDefault={renderDefault} />)
-
-    await vi.waitFor(() => {
-      expect(mockCreateCartRemoteWatcher).toHaveBeenCalledTimes(1)
-    })
-
-    unmount()
-
-    expect(stopSpy).toHaveBeenCalled()
-  })
-
   it('resolves the scoped cart key using buildCartStorageKey with workspace and user ids', async () => {
     const workspace = makeWorkspace()
     const user = makeCurrentUser()
@@ -146,10 +98,10 @@ describe('CartRemoteWatcher - starts watcher on mount with logged-in user', () =
     mockUseCurrentUser.mockReturnValue(user)
     mockUseDocumentStore.mockReturnValue(makeDocumentStore())
 
-    const CartRemoteWatcher = makeCartRemoteWatcher()
+    const CartRemoteWatcherComponent = makeCartRemoteWatcher()
     const renderDefault = vi.fn(() => <div>studio</div>)
 
-    render(<CartRemoteWatcher renderDefault={renderDefault} />)
+    render(<CartRemoteWatcherComponent renderDefault={renderDefault} />)
 
     await vi.waitFor(() => {
       expect(mockBuildCartStorageKey).toHaveBeenCalledWith({
@@ -160,22 +112,104 @@ describe('CartRemoteWatcher - starts watcher on mount with logged-in user', () =
       })
     })
   })
+
+  it('calls checkoutPair on the documentStore for each cart item when there are tracked items', async () => {
+    mockUseWorkspace.mockReturnValue(makeWorkspace())
+    mockUseCurrentUser.mockReturnValue(makeCurrentUser())
+    // Seed localStorage with one tracked item so the watcher subscribes for it
+    const {readCart} = await import('../cartStorage')
+    vi.mocked(readCart).mockReturnValue([
+      {
+        publishedId: 'doc-a',
+        draftId: 'drafts.doc-a',
+        documentType: 'article',
+        addedRev: 'rev-001',
+        baselineRev: 'rev-001',
+        changedUnderneath: false,
+        isNew: false,
+        addedAt: '2026-01-01T00:00:00.000Z',
+      },
+    ])
+    const documentStore = makeDocumentStore()
+    mockUseDocumentStore.mockReturnValue(documentStore)
+
+    const CartRemoteWatcherComponent = makeCartRemoteWatcher()
+    const renderDefault = vi.fn(() => <div>studio</div>)
+
+    const {unmount} = render(<CartRemoteWatcherComponent renderDefault={renderDefault} />)
+
+    await vi.waitFor(() => {
+      expect(documentStore.checkoutPair).toHaveBeenCalledWith({
+        draftId: 'drafts.doc-a',
+        publishedId: 'doc-a',
+      })
+    })
+
+    unmount()
+  })
+
+  it('unsubscribes from the remote-snapshot stream when the component unmounts', async () => {
+    const unsubscribeSpy = vi.fn()
+    const documentStore = {
+      pair: {
+        editState: vi.fn(() => ({subscribe: vi.fn(() => ({unsubscribe: vi.fn()}))})),
+        documentEvents: vi.fn(() => ({subscribe: vi.fn(() => ({unsubscribe: vi.fn()}))})),
+      },
+      checkoutPair: vi.fn(() => ({
+        draft: {
+          remoteSnapshot$: {subscribe: vi.fn(() => ({unsubscribe: unsubscribeSpy}))},
+        },
+      })),
+    } as unknown as ReturnType<typeof useDocumentStore>
+
+    const {readCart} = await import('../cartStorage')
+    vi.mocked(readCart).mockReturnValue([
+      {
+        publishedId: 'doc-a',
+        draftId: 'drafts.doc-a',
+        documentType: 'article',
+        addedRev: 'rev-001',
+        baselineRev: 'rev-001',
+        changedUnderneath: false,
+        isNew: false,
+        addedAt: '2026-01-01T00:00:00.000Z',
+      },
+    ])
+
+    mockUseWorkspace.mockReturnValue(makeWorkspace())
+    mockUseCurrentUser.mockReturnValue(makeCurrentUser())
+    mockUseDocumentStore.mockReturnValue(documentStore)
+
+    const CartRemoteWatcherComponent = makeCartRemoteWatcher()
+    const renderDefault = vi.fn(() => <div>studio</div>)
+
+    const {unmount} = render(<CartRemoteWatcherComponent renderDefault={renderDefault} />)
+
+    await vi.waitFor(() => {
+      expect(documentStore.checkoutPair).toHaveBeenCalled()
+    })
+
+    unmount()
+
+    expect(unsubscribeSpy).toHaveBeenCalled()
+  })
 })
 
 describe('CartRemoteWatcher - no user (no-op)', () => {
-  it('does not start the watcher when useCurrentUser returns null', async () => {
+  it('does not call checkoutPair when useCurrentUser returns null', async () => {
     mockUseWorkspace.mockReturnValue(makeWorkspace())
     mockUseCurrentUser.mockReturnValue(null)
-    mockUseDocumentStore.mockReturnValue(makeDocumentStore())
+    const documentStore = makeDocumentStore()
+    mockUseDocumentStore.mockReturnValue(documentStore)
 
-    const CartRemoteWatcher = makeCartRemoteWatcher()
+    const CartRemoteWatcherComponent = makeCartRemoteWatcher()
     const renderDefault = vi.fn(() => <div data-testid="studio">studio</div>)
 
-    const {getByTestId} = render(<CartRemoteWatcher renderDefault={renderDefault} />)
+    const {getByTestId} = render(<CartRemoteWatcherComponent renderDefault={renderDefault} />)
 
     // Children still render
     expect(getByTestId('studio')).toBeTruthy()
-    // Watcher must not be started
-    expect(mockCreateCartRemoteWatcher).not.toHaveBeenCalled()
+    // Watcher must not have started any subscriptions
+    expect(documentStore.checkoutPair).not.toHaveBeenCalled()
   })
 })
