@@ -80,5 +80,5 @@ jobs:
       - name: Install dependencies
         run: pnpm install --no-frozen-lockfile
 
-      - name: Test sanity plugin
-        run: pnpm vitest run
+      - name: Type-check plugin against Sanity ${{ matrix.sanity-version }}
+        run: pnpm --filter sanity-plugin-batch-publish type-check
