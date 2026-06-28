@@ -1,7 +1,7 @@
 import {defineConfig} from 'sanity'
 import {structureTool} from 'sanity/structure'
 import {visionTool} from '@sanity/vision'
-import {batchPublishPlugin} from 'sanity-plugin-batch-publish'
+import {batchPublish} from 'sanity-plugin-batch-publish'
 import {schemaTypes} from './schemaTypes'
 
 export default defineConfig({
@@ -9,7 +9,7 @@ export default defineConfig({
   title: 'Batch Publish Dev',
   projectId: 'i2zyueht',
   dataset: 'production',
-  plugins: [structureTool(), visionTool(), batchPublishPlugin()],
+  plugins: [structureTool(), visionTool(), batchPublish()],
   schema: {
     types: schemaTypes,
   },
