@@ -137,6 +137,17 @@ async function processItem(
 
   const decision = evaluateCartMembership(snapshot, new Date().toISOString(), config)
   cartStore.applyDecision(decision)
+
+  // A divergence between the live draft rev and the stored baseline means an edit
+  // landed while this tab was closed. Attribution is unknown at boot, so it is treated
+  // as remote (isCurrentUserAuthor: false). The transient guard (non-confident read)
+  // and removal-wins precedence both suppress flagging when the state is unreliable.
+  const draftRev = editState?.draft?._rev
+  const itemKept = decision.action !== 'remove'
+  const readWasConfident = editState !== null && editState.ready
+  if (readWasConfident && itemKept && draftRev !== undefined && draftRev !== item.baselineRev) {
+    cartStore.markChangedUnderneath(item.publishedId, draftRev, false)
+  }
 }
 
 /**
