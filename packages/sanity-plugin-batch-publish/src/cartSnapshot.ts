@@ -16,13 +16,15 @@ export interface SanityDocumentSnapshot {
  * Shape of the edit state snapshot used to build a CartMembershipSnapshot.
  *
  * Matches the relevant fields from `EditStateFor` emitted by
- * `documentStore.pair.editState`. Each document carries `_rev`.
+ * `documentStore.pair.editState`. Each document carries `_rev`. The published
+ * document carries its content fields so the snapshot can detect a draft that
+ * has been reverted to exactly match the published version.
  *
  * @public
  */
 export interface EditStateSnapshot {
   draft: SanityDocumentSnapshot | null
-  published: {_id: string; _rev: string} | null
+  published: SanityDocumentSnapshot | null
   liveEditSchemaType: boolean
   ready: boolean
 }
@@ -58,7 +60,7 @@ export function draftHasRealContent(draft: SanityDocumentSnapshot): boolean {
  */
 export function snapshotsMatchIgnoringMeta(
   draft: SanityDocumentSnapshot,
-  published: {_id: string; _rev: string},
+  published: SanityDocumentSnapshot,
 ): boolean {
   const ignoredKeys = new Set(['_rev', '_updatedAt', '_id', '_type', '_createdAt'])
 

@@ -53,7 +53,7 @@ function makeErrorObservable<T>(error: Error) {
 
 interface EditStateShape {
   draft: {_id: string; _rev: string; _type: string; [key: string]: unknown} | null
-  published: {_id: string; _rev: string} | null
+  published: {_id: string; _rev: string; _type: string; [key: string]: unknown} | null
   liveEditSchemaType: boolean
   ready: boolean
 }
@@ -63,7 +63,7 @@ function makeReadyEditState(opts: {
   hasContent?: boolean
   matchesPublished?: boolean
 }): EditStateShape {
-  const published = {_id: 'doc-1', _rev: 'pub-rev-001'}
+  const published = {_id: 'doc-1', _rev: 'pub-rev-001', _type: 'article'}
 
   if (opts.hasDraft === false) {
     return {
@@ -181,8 +181,9 @@ describe('buildMembershipSnapshot', () => {
       published: {
         _id: 'doc-1',
         _rev: 'pub-rev',
+        _type: 'article',
         title: 'old title',
-      } as EditStateShape['published'] & {title: string},
+      },
       liveEditSchemaType: false,
       ready: true,
     }
@@ -255,7 +256,7 @@ describe('revalidateCartOnBoot', () => {
     const publishedId = 'doc-stale'
     const editState: EditStateShape = {
       draft: null,
-      published: {_id: publishedId, _rev: 'pub-rev'},
+      published: {_id: publishedId, _rev: 'pub-rev', _type: 'article'},
       liveEditSchemaType: false,
       ready: true,
     }
@@ -286,8 +287,9 @@ describe('revalidateCartOnBoot', () => {
       published: {
         _id: publishedId,
         _rev: 'pub-rev',
+        _type: 'article',
         title: 'same',
-      } as EditStateShape['published'] & {title: string},
+      },
       liveEditSchemaType: false,
       ready: true,
     }

@@ -1,17 +1,30 @@
 import {definePlugin} from 'sanity'
 
+import {makeCartBootRevalidator} from './CartBootRevalidator'
 import {makeCartDocumentObserver} from './CartDocumentObserver'
 import type {BatchPublishPluginConfig} from './types'
 
 export {addItem, hasItem, removeItem} from './cartSet'
+export {
+  buildMembershipSnapshot,
+  draftHasRealContent,
+  snapshotsMatchIgnoringMeta,
+} from './cartSnapshot'
+export type {
+  BuildMembershipSnapshotParams,
+  EditStateSnapshot,
+  SanityDocumentSnapshot,
+} from './cartSnapshot'
 export {buildCartStorageKey, readCart, writeCart, subscribeToCartStorage} from './cartStorage'
 export {createCartStore} from './cartStore'
 export type {CartStore} from './cartStore'
+export {CartBootRevalidator, makeCartBootRevalidator} from './CartBootRevalidator'
 export {CartDocumentObserver} from './CartDocumentObserver'
 export {evaluateCartMembership} from './evaluateCartMembership'
 export type {CartMembershipDecision, CartMembershipSnapshot} from './evaluateCartMembership'
 export {isCartCandidate} from './isCartCandidate'
 export type {CartCandidateInput} from './isCartCandidate'
+export {revalidateCartOnBoot} from './revalidateCartOnBoot'
 export type {BatchPublishPluginConfig, CartItem} from './types'
 export {useCart} from './useCart'
 
@@ -22,6 +35,11 @@ export const batchPublish = definePlugin<BatchPublishPluginConfig | void>((confi
     document: {
       components: {
         unstable_layout: makeCartDocumentObserver(config ?? undefined),
+      },
+    },
+    studio: {
+      components: {
+        layout: makeCartBootRevalidator(config ?? undefined),
       },
     },
   }

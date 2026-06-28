@@ -1,4 +1,3 @@
-import React from 'react'
 import {cleanup, render} from '@testing-library/react'
 import {afterEach, describe, expect, it, vi} from 'vitest'
 
@@ -50,7 +49,7 @@ function makeWorkspace() {
 }
 
 function makeCurrentUser() {
-  return {id: 'user-alice', name: 'Alice'} as ReturnType<typeof useCurrentUser>
+  return {id: 'user-alice', name: 'Alice'} as NonNullable<ReturnType<typeof useCurrentUser>>
 }
 
 function makeDocumentStore() {
