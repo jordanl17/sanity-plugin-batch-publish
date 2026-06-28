@@ -29,13 +29,22 @@ interface RemoteSnapshotEventLike {
 
 /**
  * Minimal interface for the document store used by the watcher.
- * Exposes only the two streams the watcher needs.
+ * Exposes only the streams the watcher needs:
+ *  - `checkoutPair` for the per-item remote-snapshot and events streams.
+ *  - `pair.editState` for the editState fallback ref.
+ *
+ * `draft.events` is subscribed alongside `remoteSnapshot$` to drive the checkout's
+ * realtime listener; without an active `events` subscriber the listener never starts
+ * and `remoteSnapshot$` only delivers the initial snapshot event.
  *
  * @internal
  */
 interface DocumentStoreLike {
   checkoutPair?: (idPair: {draftId: string; publishedId: string}) => {
-    draft: {remoteSnapshot$: Subscribable<RemoteSnapshotEventLike>}
+    draft: {
+      remoteSnapshot$: Subscribable<RemoteSnapshotEventLike>
+      events: Subscribable<unknown>
+    }
   }
   pair?: {
     editState?: (publishedId: string, documentType: string) => Subscribable<EditStateSnapshot>
@@ -54,12 +63,14 @@ interface CartStoreLike {
 }
 
 /**
- * Per-item subscription bundle: holds both the remote-snapshot and editState teardowns.
+ * Per-item subscription bundle: holds teardowns for the remote-snapshot, events, and
+ * editState subscriptions.
  *
  * @internal
  */
 interface ItemSubscription {
   remoteSnapshotUnsub: () => void
+  eventsUnsub: () => void
   editStateUnsub: () => void
 }
 
@@ -93,15 +104,20 @@ function resolveIsCurrentUserAuthor(
 /**
  * Builds a per-item subscription to the DRAFT remote-snapshot stream.
  *
+ * Subscribes to both `pair.draft.events` and `pair.draft.remoteSnapshot$`. The `events`
+ * subscription drives the checkout's realtime listener — without it the listener is never
+ * started and `remoteSnapshot$` only delivers the initial snapshot event and no live
+ * `remoteMutation` events.
+ *
  * On each `remoteMutation` event:
- *  1. Resolves the current draft rev from the per-item editState ref (`editState.draft._rev`)
- *     with `event.head?._rev` as fallback when the ref has not been populated yet.
+ *  1. Resolves the current draft rev from `event.head._rev` (the authoritative post-mutation
+ *     rev), falling back to the per-item editState ref when `head._rev` is absent.
  *  2. Computes `isCurrentUserAuthor` (falsy author → false).
  *  3. Calls `cartStore.markChangedUnderneath` — the store's flag logic decides whether to set
  *     or clear the flag based on whether the rev diverges from the baseline.
  *
- * Also maintains a lightweight editState subscription that keeps a local ref current so the
- * rev read is the store-sequentialised draft state rather than the raw event rev.
+ * Also maintains a lightweight editState subscription that keeps a local ref current as a
+ * fallback rev source when `event.head._rev` is absent.
  */
 function buildItemSubscription(
   item: CartItem,
@@ -118,7 +134,7 @@ function buildItemSubscription(
 
   const idPair = {draftId: item.draftId, publishedId: item.publishedId}
 
-  // Keep a local editState ref so the rev read reflects the store-sequentialised state.
+  // Keep a local editState ref as a fallback rev source when event.head._rev is absent.
   let editStateRef: EditStateSnapshot | null = null
 
   let editStateUnsub: () => void = function noop() {}
@@ -133,6 +149,17 @@ function buildItemSubscription(
   }
 
   const pair = checkoutPair(idPair)
+
+  // Subscribe to pair.draft.events to drive the checkout's realtime listener.
+  // Without an active subscriber here, the pair listener never starts and
+  // remoteSnapshot$ delivers only the initial snapshot — no live remoteMutation events.
+  const eventsSub = pair.draft.events.subscribe(function handleDraftEvent(_event: unknown) {
+    // No-op: the subscription exists solely to keep the pair listener active.
+  })
+  const eventsUnsub = function unsubscribeEvents() {
+    eventsSub.unsubscribe()
+  }
+
   const remoteSnapshotSub = pair.draft.remoteSnapshot$.subscribe(
     (event: RemoteSnapshotEventLike) => {
       if (event.type !== 'remoteMutation') {
@@ -140,9 +167,9 @@ function buildItemSubscription(
         return
       }
 
-      // Prefer the store-sequentialised editState rev; fall back to event head when the ref
-      // has not yet received its first emission.
-      const currentRev = editStateRef?.draft?._rev ?? event.head?._rev
+      // Prefer event.head._rev — the authoritative post-mutation rev delivered with the
+      // event itself. Fall back to editState when head._rev is absent (e.g. deletions).
+      const currentRev = event.head?._rev ?? editStateRef?.draft?._rev
       if (currentRev === undefined) {
         return
       }
@@ -156,6 +183,7 @@ function buildItemSubscription(
     remoteSnapshotUnsub: function unsubscribeRemoteSnapshot() {
       remoteSnapshotSub.unsubscribe()
     },
+    eventsUnsub,
     editStateUnsub,
   }
 }
@@ -164,14 +192,19 @@ function buildItemSubscription(
  * Creates a Studio-wide watcher that maintains a per-cart-item subscription to the DRAFT
  * remote-snapshot stream (`documentStore.checkoutPair(idPair).draft.remoteSnapshot$`).
  *
- * On each `remoteMutation` event, the watcher re-reads the live draft rev from a per-item
- * editState subscription and calls `cartStore.markChangedUnderneath` with the resolved
- * author authorship flag. The store's own flag logic (`applyRemoteRevChange`) decides whether
- * to set or clear the `changedUnderneath` flag.
+ * For each item the watcher also subscribes to `pair.draft.events` to drive the checkout's
+ * realtime listener (without this, `remoteSnapshot$` only delivers the initial snapshot and
+ * no live `remoteMutation` events). An editState subscription provides a fallback rev source
+ * when `event.head._rev` is absent.
+ *
+ * On each `remoteMutation` event, the watcher resolves the live draft rev from
+ * `event.head._rev` (authoritative) and calls `cartStore.markChangedUnderneath`. The store's
+ * own flag logic (`applyRemoteRevChange`) decides whether to set or clear the flag.
  *
  * The subscription set reconciles as items enter and leave the cart: a new subscription is
- * opened when an item is added, and the subscription is torn down when the item is removed.
- * On `stop()`, all subscriptions are torn down and the cart-store listener is detached.
+ * opened when an item is added, and all three subscriptions are torn down when the item is
+ * removed. On `stop()`, all subscriptions are torn down and the cart-store listener is
+ * detached.
  *
  * Availability guard: when `documentStore.checkoutPair` is absent (SSR or stripped build),
  * returns a no-op `{stop(){}}`.
@@ -195,8 +228,8 @@ export function createCartRemoteWatcher(params: CartRemoteWatcherParams): {stop(
   const itemSubscriptions = new Map<string, ItemSubscription>()
 
   /**
-   * Opens a remote-snapshot subscription for a cart item if one is not already open.
-   * Guards against double-subscribe for the same publishedId.
+   * Opens remote-snapshot, events, and editState subscriptions for a cart item if not
+   * already open. Guards against double-subscribe for the same publishedId.
    */
   function subscribeItem(item: CartItem): void {
     if (itemSubscriptions.has(item.publishedId)) {
@@ -210,7 +243,7 @@ export function createCartRemoteWatcher(params: CartRemoteWatcherParams): {stop(
   }
 
   /**
-   * Tears down the subscription for the given publishedId and removes it from the map.
+   * Tears down all subscriptions for the given publishedId and removes it from the map.
    */
   function unsubscribeItem(publishedId: string): void {
     const sub = itemSubscriptions.get(publishedId)
@@ -218,6 +251,7 @@ export function createCartRemoteWatcher(params: CartRemoteWatcherParams): {stop(
       return
     }
     sub.remoteSnapshotUnsub()
+    sub.eventsUnsub()
     sub.editStateUnsub()
     itemSubscriptions.delete(publishedId)
   }

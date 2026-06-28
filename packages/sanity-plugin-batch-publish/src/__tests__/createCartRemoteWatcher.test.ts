@@ -44,6 +44,32 @@ function makeRemoteSnapshotSubject() {
 }
 
 /**
+ * Creates a controllable events observable subject for a cart item.
+ * Tracks whether the watcher subscribes to `pair.draft.events` to drive the checkout's
+ * realtime listener.
+ */
+function makeEventsSubject() {
+  const subscribers: Array<(value: unknown) => void> = []
+  const unsubscribeSpy = vi.fn()
+  return {
+    unsubscribeSpy,
+    subscribe(observer: (value: unknown) => void) {
+      subscribers.push(observer)
+      return {
+        unsubscribe() {
+          const idx = subscribers.indexOf(observer)
+          if (idx !== -1) subscribers.splice(idx, 1)
+          unsubscribeSpy()
+        },
+      }
+    },
+    subscriberCount(): number {
+      return subscribers.length
+    },
+  }
+}
+
+/**
  * Creates a controllable editState subject per publishedId.
  * Emits a configurable draft._rev so the watcher's rev re-read is exercised.
  */
@@ -77,6 +103,7 @@ interface FakeItemSpec {
   draftId: string
   documentType: string
   remoteSnapshotSubject: ReturnType<typeof makeRemoteSnapshotSubject>
+  eventsSubject: ReturnType<typeof makeEventsSubject>
   editStateSubject: ReturnType<typeof makeEditStateSubject>
 }
 
@@ -86,6 +113,7 @@ function makeDocumentStore(itemSpecs: FakeItemSpec[]) {
     return {
       draft: {
         remoteSnapshot$: spec?.remoteSnapshotSubject ?? makeRemoteSnapshotSubject(),
+        events: spec?.eventsSubject ?? makeEventsSubject(),
       },
     }
   })
@@ -159,6 +187,7 @@ describe('createCartRemoteWatcher - subscription setup', () => {
       draftId: 'drafts.doc-a',
       documentType: 'article',
       remoteSnapshotSubject: makeRemoteSnapshotSubject(),
+      eventsSubject: makeEventsSubject(),
       editStateSubject: makeEditStateSubject('rev-baseline'),
     }
     const specB: FakeItemSpec = {
@@ -166,6 +195,7 @@ describe('createCartRemoteWatcher - subscription setup', () => {
       draftId: 'drafts.doc-b',
       documentType: 'article',
       remoteSnapshotSubject: makeRemoteSnapshotSubject(),
+      eventsSubject: makeEventsSubject(),
       editStateSubject: makeEditStateSubject('rev-baseline'),
     }
 
@@ -190,12 +220,47 @@ describe('createCartRemoteWatcher - subscription setup', () => {
     watcher.stop()
   })
 
+  it('subscribes to pair.draft.events for each cart item to drive the checkout realtime listener', async () => {
+    const specA: FakeItemSpec = {
+      publishedId: 'doc-a',
+      draftId: 'drafts.doc-a',
+      documentType: 'article',
+      remoteSnapshotSubject: makeRemoteSnapshotSubject(),
+      eventsSubject: makeEventsSubject(),
+      editStateSubject: makeEditStateSubject('rev-baseline'),
+    }
+    const specB: FakeItemSpec = {
+      publishedId: 'doc-b',
+      draftId: 'drafts.doc-b',
+      documentType: 'article',
+      remoteSnapshotSubject: makeRemoteSnapshotSubject(),
+      eventsSubject: makeEventsSubject(),
+      editStateSubject: makeEditStateSubject('rev-baseline'),
+    }
+
+    const {store: docStore} = makeDocumentStore([specA, specB])
+    const {store: cartStore} = makeCartStore([specA, specB])
+
+    const watcher = createCartRemoteWatcher({
+      documentStore: docStore,
+      cartStore,
+      currentUserId: 'user-alice',
+    })
+
+    // events subscriber must be present for each item so the checkout listener is active
+    expect(specA.eventsSubject.subscriberCount()).toBe(1)
+    expect(specB.eventsSubject.subscriberCount()).toBe(1)
+
+    watcher.stop()
+  })
+
   it('does not double-subscribe when reconcile re-reports an already-watched id', async () => {
     const specA: FakeItemSpec = {
       publishedId: 'doc-a',
       draftId: 'drafts.doc-a',
       documentType: 'article',
       remoteSnapshotSubject: makeRemoteSnapshotSubject(),
+      eventsSubject: makeEventsSubject(),
       editStateSubject: makeEditStateSubject('rev-baseline'),
     }
 
@@ -225,6 +290,7 @@ describe('createCartRemoteWatcher - subscription setup', () => {
     // checkoutPair should still only have been called once (no re-subscription)
     expect(checkoutPairSpy).toHaveBeenCalledTimes(1)
     expect(specA.remoteSnapshotSubject.subscriberCount()).toBe(1)
+    expect(specA.eventsSubject.subscriberCount()).toBe(1)
 
     watcher.stop()
   })
@@ -237,6 +303,7 @@ describe('createCartRemoteWatcher - event handling', () => {
       draftId: 'drafts.doc-a',
       documentType: 'article',
       remoteSnapshotSubject: makeRemoteSnapshotSubject(),
+      eventsSubject: makeEventsSubject(),
       editStateSubject: makeEditStateSubject('rev-baseline'),
     }
 
@@ -259,12 +326,81 @@ describe('createCartRemoteWatcher - event handling', () => {
     watcher.stop()
   })
 
-  it('flags via rev re-read from editState when remote mutation is by another user', async () => {
+  it('uses event.head._rev (authoritative) as the rev passed to markChangedUnderneath', async () => {
     const specA: FakeItemSpec = {
       publishedId: 'doc-a',
       draftId: 'drafts.doc-a',
       documentType: 'article',
       remoteSnapshotSubject: makeRemoteSnapshotSubject(),
+      eventsSubject: makeEventsSubject(),
+      // editState ref carries an older (lagging) rev to prove it is not preferred
+      editStateSubject: makeEditStateSubject('rev-lagging'),
+    }
+
+    const {store: docStore} = makeDocumentStore([specA])
+    const {markChangedUnderneathSpy, store: cartStore} = makeCartStore([specA])
+
+    const watcher = createCartRemoteWatcher({
+      documentStore: docStore,
+      cartStore,
+      currentUserId: 'user-alice',
+    })
+
+    // Wait for editState to emit the lagging rev into the ref
+    await new Promise<void>((resolve) => setTimeout(resolve, 10))
+
+    await specA.remoteSnapshotSubject.emitAsync({
+      type: 'remoteMutation',
+      author: 'user-bob',
+      // event carries the authoritative post-mutation rev
+      head: {_rev: 'rev-authoritative'},
+    })
+
+    // Must use rev-authoritative from event.head, NOT rev-lagging from editState
+    expect(markChangedUnderneathSpy).toHaveBeenCalledWith('doc-a', 'rev-authoritative', false)
+    watcher.stop()
+  })
+
+  it('falls back to editState rev when event.head._rev is absent', async () => {
+    const specA: FakeItemSpec = {
+      publishedId: 'doc-a',
+      draftId: 'drafts.doc-a',
+      documentType: 'article',
+      remoteSnapshotSubject: makeRemoteSnapshotSubject(),
+      eventsSubject: makeEventsSubject(),
+      editStateSubject: makeEditStateSubject('rev-from-editstate'),
+    }
+
+    const {store: docStore} = makeDocumentStore([specA])
+    const {markChangedUnderneathSpy, store: cartStore} = makeCartStore([specA])
+
+    const watcher = createCartRemoteWatcher({
+      documentStore: docStore,
+      cartStore,
+      currentUserId: 'user-alice',
+    })
+
+    // Wait for editState to emit and populate the fallback ref
+    await new Promise<void>((resolve) => setTimeout(resolve, 10))
+
+    await specA.remoteSnapshotSubject.emitAsync({
+      type: 'remoteMutation',
+      author: 'user-bob',
+      // no head._rev — fallback to editState ref
+      head: {},
+    })
+
+    expect(markChangedUnderneathSpy).toHaveBeenCalledWith('doc-a', 'rev-from-editstate', false)
+    watcher.stop()
+  })
+
+  it('flags via rev from editState when remote mutation is by another user', async () => {
+    const specA: FakeItemSpec = {
+      publishedId: 'doc-a',
+      draftId: 'drafts.doc-a',
+      documentType: 'article',
+      remoteSnapshotSubject: makeRemoteSnapshotSubject(),
+      eventsSubject: makeEventsSubject(),
       editStateSubject: makeEditStateSubject('rev-new'),
     }
 
@@ -286,7 +422,7 @@ describe('createCartRemoteWatcher - event handling', () => {
       head: {_rev: 'rev-new'},
     })
 
-    // Author differs from current user; rev from editState; should flag
+    // Author differs from current user; rev from event.head; should flag
     expect(markChangedUnderneathSpy).toHaveBeenCalledWith('doc-a', 'rev-new', false)
     watcher.stop()
   })
@@ -297,6 +433,7 @@ describe('createCartRemoteWatcher - event handling', () => {
       draftId: 'drafts.doc-a',
       documentType: 'article',
       remoteSnapshotSubject: makeRemoteSnapshotSubject(),
+      eventsSubject: makeEventsSubject(),
       editStateSubject: makeEditStateSubject('rev-x'),
     }
 
@@ -328,6 +465,7 @@ describe('createCartRemoteWatcher - event handling', () => {
       draftId: 'drafts.doc-a',
       documentType: 'article',
       remoteSnapshotSubject: makeRemoteSnapshotSubject(),
+      eventsSubject: makeEventsSubject(),
       editStateSubject: makeEditStateSubject('rev-y'),
     }
 
@@ -358,6 +496,7 @@ describe('createCartRemoteWatcher - event handling', () => {
       draftId: 'drafts.doc-a',
       documentType: 'article',
       remoteSnapshotSubject: makeRemoteSnapshotSubject(),
+      eventsSubject: makeEventsSubject(),
       editStateSubject: makeEditStateSubject('rev-z'),
     }
 
@@ -390,6 +529,7 @@ describe('createCartRemoteWatcher - membership reconciliation', () => {
       draftId: 'drafts.doc-a',
       documentType: 'article',
       remoteSnapshotSubject: makeRemoteSnapshotSubject(),
+      eventsSubject: makeEventsSubject(),
       editStateSubject: makeEditStateSubject('rev-baseline'),
     }
     const specC: FakeItemSpec = {
@@ -397,6 +537,7 @@ describe('createCartRemoteWatcher - membership reconciliation', () => {
       draftId: 'drafts.doc-c',
       documentType: 'article',
       remoteSnapshotSubject: makeRemoteSnapshotSubject(),
+      eventsSubject: makeEventsSubject(),
       editStateSubject: makeEditStateSubject('rev-baseline'),
     }
 
@@ -440,6 +581,7 @@ describe('createCartRemoteWatcher - membership reconciliation', () => {
     expect(checkoutPairSpy).toHaveBeenCalledTimes(2)
     expect(checkoutPairSpy).toHaveBeenCalledWith({draftId: 'drafts.doc-c', publishedId: 'doc-c'})
     expect(specC.remoteSnapshotSubject.subscriberCount()).toBe(1)
+    expect(specC.eventsSubject.subscriberCount()).toBe(1)
 
     watcher.stop()
   })
@@ -450,6 +592,7 @@ describe('createCartRemoteWatcher - membership reconciliation', () => {
       draftId: 'drafts.doc-a',
       documentType: 'article',
       remoteSnapshotSubject: makeRemoteSnapshotSubject(),
+      eventsSubject: makeEventsSubject(),
       editStateSubject: makeEditStateSubject('rev-baseline'),
     }
     const specB: FakeItemSpec = {
@@ -457,6 +600,7 @@ describe('createCartRemoteWatcher - membership reconciliation', () => {
       draftId: 'drafts.doc-b',
       documentType: 'article',
       remoteSnapshotSubject: makeRemoteSnapshotSubject(),
+      eventsSubject: makeEventsSubject(),
       editStateSubject: makeEditStateSubject('rev-baseline'),
     }
 
@@ -485,9 +629,11 @@ describe('createCartRemoteWatcher - membership reconciliation', () => {
       },
     ])
 
-    // doc-a's unsubscribe should have fired
+    // doc-a's unsubscribes should have fired
     expect(specA.remoteSnapshotSubject.unsubscribeSpy).toHaveBeenCalled()
+    expect(specA.eventsSubject.unsubscribeSpy).toHaveBeenCalled()
     expect(specA.remoteSnapshotSubject.subscriberCount()).toBe(0)
+    expect(specA.eventsSubject.subscriberCount()).toBe(0)
 
     // A later emit on doc-a's stream does NOT call markChangedUnderneath
     const callCountBefore = fakeCart.markChangedUnderneathSpy.mock.calls.length
@@ -503,12 +649,13 @@ describe('createCartRemoteWatcher - membership reconciliation', () => {
 })
 
 describe('createCartRemoteWatcher - teardown', () => {
-  it('unsubscribes all remote-snapshot and cartStore subscriptions on stop()', async () => {
+  it('unsubscribes all remote-snapshot, events, and cartStore subscriptions on stop()', async () => {
     const specA: FakeItemSpec = {
       publishedId: 'doc-a',
       draftId: 'drafts.doc-a',
       documentType: 'article',
       remoteSnapshotSubject: makeRemoteSnapshotSubject(),
+      eventsSubject: makeEventsSubject(),
       editStateSubject: makeEditStateSubject('rev-baseline'),
     }
     const specB: FakeItemSpec = {
@@ -516,6 +663,7 @@ describe('createCartRemoteWatcher - teardown', () => {
       draftId: 'drafts.doc-b',
       documentType: 'article',
       remoteSnapshotSubject: makeRemoteSnapshotSubject(),
+      eventsSubject: makeEventsSubject(),
       editStateSubject: makeEditStateSubject('rev-baseline'),
     }
 
@@ -534,6 +682,10 @@ describe('createCartRemoteWatcher - teardown', () => {
     expect(specA.remoteSnapshotSubject.unsubscribeSpy).toHaveBeenCalled()
     expect(specB.remoteSnapshotSubject.unsubscribeSpy).toHaveBeenCalled()
 
+    // All per-item events subs torn down
+    expect(specA.eventsSubject.unsubscribeSpy).toHaveBeenCalled()
+    expect(specB.eventsSubject.unsubscribeSpy).toHaveBeenCalled()
+
     // CartStore subscription torn down
     expect(unsubscribeStoreSpy).toHaveBeenCalled()
   })
@@ -544,6 +696,7 @@ describe('createCartRemoteWatcher - teardown', () => {
       draftId: 'drafts.doc-a',
       documentType: 'article',
       remoteSnapshotSubject: makeRemoteSnapshotSubject(),
+      eventsSubject: makeEventsSubject(),
       editStateSubject: makeEditStateSubject('rev-baseline'),
     }
 

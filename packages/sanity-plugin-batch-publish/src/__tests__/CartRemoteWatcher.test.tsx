@@ -57,6 +57,7 @@ function makeDocumentStore() {
     checkoutPair: vi.fn(() => ({
       draft: {
         remoteSnapshot$: {subscribe: vi.fn(() => ({unsubscribe: vi.fn()}))},
+        events: {subscribe: vi.fn(() => ({unsubscribe: vi.fn()}))},
       },
     })),
   } as unknown as ReturnType<typeof useDocumentStore>
@@ -158,6 +159,7 @@ describe('CartRemoteWatcher - starts watcher on mount with logged-in user', () =
       checkoutPair: vi.fn(() => ({
         draft: {
           remoteSnapshot$: {subscribe: vi.fn(() => ({unsubscribe: unsubscribeSpy}))},
+          events: {subscribe: vi.fn(() => ({unsubscribe: vi.fn()}))},
         },
       })),
     } as unknown as ReturnType<typeof useDocumentStore>
