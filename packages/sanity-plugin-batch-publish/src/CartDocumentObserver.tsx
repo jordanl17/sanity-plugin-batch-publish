@@ -2,9 +2,11 @@ import React, {useEffect, useRef} from 'react'
 import {useCurrentUser, useDocumentStore, useWorkspace, getPublishedId} from 'sanity'
 
 import {buildCartStorageKey} from './cartStorage'
+import {draftHasRealContent, snapshotsMatchIgnoringMeta} from './cartSnapshot'
 import {createCartStore} from './cartStore'
 import {evaluateCartMembership} from './evaluateCartMembership'
 import type {CartStore} from './cartStore'
+import type {EditStateSnapshot, SanityDocumentSnapshot} from './cartSnapshot'
 import type {BatchPublishPluginConfig} from './types'
 
 /**
@@ -17,27 +19,6 @@ interface DocumentLayoutProps {
   documentId: string
   documentType: string
   renderDefault: (props: DocumentLayoutProps) => React.JSX.Element
-}
-
-/**
- * A Sanity document that has at least `_id` and `_rev` fields.
- */
-interface SanityDocumentSnapshot {
-  _id: string
-  _rev: string
-  _type: string
-  [key: string]: unknown
-}
-
-/**
- * Shape of the edit state snapshot we care about from
- * `documentStore.pair.editState`.
- */
-interface EditStateSnapshot {
-  draft: SanityDocumentSnapshot | null
-  published: {_id: string; _rev: string} | null
-  liveEditSchemaType: boolean
-  ready: boolean
 }
 
 /**
@@ -73,38 +54,6 @@ function getCartStore(key: string): CartStore {
   const store = createCartStore(key)
   cartStoreRegistry.set(key, store)
   return store
-}
-
-/**
- * Determines whether a draft document has real content beyond bare system fields.
- * A document with at least one non-underscore key has content.
- */
-function draftHasRealContent(draft: SanityDocumentSnapshot): boolean {
-  return Object.keys(draft).some((key) => key.startsWith('_') === false)
-}
-
-/**
- * Deep-compares two snapshot objects for equality, ignoring `_rev`, `_updatedAt`, and `_id`.
- * Used to detect reverted-to-published state.
- */
-function snapshotsMatchIgnoringMeta(
-  draft: SanityDocumentSnapshot,
-  published: {_id: string; _rev: string},
-): boolean {
-  const ignoredKeys = new Set(['_rev', '_updatedAt', '_id'])
-
-  const draftKeys = Object.keys(draft).filter((key) => ignoredKeys.has(key) === false)
-  const publishedKeys = Object.keys(published).filter((key) => ignoredKeys.has(key) === false)
-
-  if (draftKeys.length !== publishedKeys.length) {
-    return false
-  }
-
-  return draftKeys.every((key) => {
-    const draftValue = (draft as Record<string, unknown>)[key]
-    const publishedValue = (published as Record<string, unknown>)[key]
-    return JSON.stringify(draftValue) === JSON.stringify(publishedValue)
-  })
 }
 
 /**
