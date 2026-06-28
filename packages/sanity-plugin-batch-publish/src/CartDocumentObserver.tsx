@@ -154,6 +154,14 @@ export function makeCartDocumentObserver(config?: BatchPublishPluginConfig) {
         )
 
         cartStore.applyDecision(decision)
+
+        // A local mutation means the user owns the current state — clear any remote-change
+        // flag and advance the baseline atomically so the remote-snapshot watcher does not
+        // re-flag the user's own in-progress edits as external changes.
+        const currentDraftRev = editStateRef.current?.draft?._rev
+        if (decision.action !== 'remove' && currentDraftRev !== undefined) {
+          cartStore.ownByCurrentUser(publishedId, currentDraftRev)
+        }
       })
 
       return function cleanup() {

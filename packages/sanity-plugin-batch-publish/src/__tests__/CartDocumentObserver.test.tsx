@@ -304,6 +304,101 @@ describe('CartDocumentObserver - ready === false guard (definitive: false)', () 
   })
 })
 
+describe('CartDocumentObserver - local mutation clears flag (ownByCurrentUser)', () => {
+  it('calls ownByCurrentUser on the cart store when a local mutation fires for a tracked flagged item', async () => {
+    const publishedId = 'doc-flagged'
+    const draftRev = 'rev-002'
+    const storageKey = `test:proj1:production:default:user-alice`
+
+    // Pre-seed the store with a flagged tracked item.
+    const trackedItem = {
+      publishedId,
+      draftId: `drafts.${publishedId}`,
+      documentType: 'article',
+      addedRev: 'rev-001',
+      baselineRev: 'rev-001',
+      changedUnderneath: true,
+      isNew: false,
+      addedAt: '2026-01-01T00:00:00.000Z',
+    }
+    vi.mocked(readCart).mockReturnValue([trackedItem])
+
+    const eventSubject = makeTestSubject<EventPayload>()
+
+    // Async editState observable — emit on a later tick to model real Server-fetch timing
+    // (load-bearing lesson: sync doubles can mask missing reads of editStateRef.current).
+    function makeAsyncEditStateObservable<T>(value: T) {
+      return {
+        subscribe(observer: (value: T) => void) {
+          const timer = setTimeout(() => observer(value), 0)
+          return {
+            unsubscribe() {
+              clearTimeout(timer)
+            },
+          }
+        },
+      }
+    }
+
+    const editState = makeEditStateSnapshot({
+      draftId: `drafts.${publishedId}`,
+      publishedId,
+      ready: true,
+    })
+    const editStateWithRev = {...editState, draft: {...editState.draft!, _rev: draftRev}}
+
+    const documentStore = {
+      pair: {
+        documentEvents: vi.fn(() => eventSubject.asObservable()),
+        editState: vi.fn(() => makeAsyncEditStateObservable(editStateWithRev)),
+      },
+    } as unknown as ReturnType<typeof useDocumentStore>
+
+    mockUseWorkspace.mockReturnValue(makeWorkspace())
+    mockUseCurrentUser.mockReturnValue(makeCurrentUser())
+    mockUseDocumentStore.mockReturnValue(documentStore)
+    mockUseSchema.mockReturnValue({} as ReturnType<typeof useSchema>)
+
+    const CartDocumentObserver = makeCartDocumentObserver()
+    const renderDefault = vi.fn(() => <div>pane</div>)
+
+    render(
+      <CartDocumentObserver
+        {...{documentId: `drafts.${publishedId}`, documentType: 'article', renderDefault}}
+      />,
+    )
+
+    // Obtain the shared CartStore for this key so we can spy on ownByCurrentUser directly.
+    const {getCartStore} = await import('../CartDocumentObserver')
+    const cartStore = getCartStore(storageKey)
+    const ownByCurrentUserSpy = vi.spyOn(cartStore, 'ownByCurrentUser')
+
+    // Wait for the async editState emission to populate editStateRef.current.
+    await act(async () => {
+      await new Promise<void>((resolve) => setTimeout(resolve, 10))
+    })
+
+    // Fire a local mutation. Include a content field so draftHasRealContent returns true
+    // (system-only fields would fail the content check and result in a remove decision).
+    // The observer must call ownByCurrentUser with the publishedId and the draft._rev
+    // resolved from editStateRef.
+    await act(async () => {
+      eventSubject.next({
+        type: 'mutation',
+        origin: 'local',
+        document: {
+          _id: `drafts.${publishedId}`,
+          _rev: draftRev,
+          _type: 'article',
+          title: 'some content',
+        },
+      })
+    })
+
+    expect(ownByCurrentUserSpy).toHaveBeenCalledWith(publishedId, draftRev)
+  })
+})
+
 describe('CartDocumentObserver - unmount cleanup', () => {
   it('unsubscribes from documentEvents on unmount', async () => {
     const unsubscribeSpy = vi.fn()
