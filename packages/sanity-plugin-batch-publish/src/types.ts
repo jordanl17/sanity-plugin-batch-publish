@@ -37,8 +37,24 @@ export interface CartItem {
   draftId: string
   /** The schema `_type` of the document. */
   documentType: string
-  /** Snapshot of the draft `_rev` captured at add-time (concurrency baseline per CONC-01). */
+  /** Snapshot of the draft `_rev` captured at add-time. Advances on idempotent re-add (upsert). */
   addedRev: string
+  /**
+   * The moving concurrency baseline rev. Advances when the current user edits the item (a local
+   * edit means the user now owns all in-flight changes). The changed-underneath flag compares the
+   * live draft rev against this field, never against `addedRev`.
+   *
+   * @public
+   */
+  baselineRev: string
+  /**
+   * True when an unreviewed remote change sits on top of the stored baseline (CONC-02). Sticky:
+   * clears only when the current user edits the item (advancing the baseline) or the draft rev
+   * reverts to the baseline.
+   *
+   * @public
+   */
+  changedUnderneath: boolean
   /** True when there is no published version yet (brand-new draft vs an update). */
   isNew: boolean
   /** ISO timestamp of when the item entered the cart. */

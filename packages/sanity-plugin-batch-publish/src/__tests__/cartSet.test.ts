@@ -8,6 +8,8 @@ const articleDraft: CartItem = {
   draftId: 'drafts.abc',
   documentType: 'article',
   addedRev: 'rev-1',
+  baselineRev: 'rev-1',
+  changedUnderneath: false,
   isNew: false,
   addedAt: '2026-06-28T10:00:00.000Z',
 }
@@ -17,6 +19,8 @@ const productDraft: CartItem = {
   draftId: 'drafts.def',
   documentType: 'product',
   addedRev: 'rev-a',
+  baselineRev: 'rev-a',
+  changedUnderneath: false,
   isNew: true,
   addedAt: '2026-06-28T11:00:00.000Z',
 }

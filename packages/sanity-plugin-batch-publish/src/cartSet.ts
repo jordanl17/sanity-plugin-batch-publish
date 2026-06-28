@@ -12,11 +12,14 @@ export function hasItem(cart: CartItem[], publishedId: string): boolean {
 /**
  * Idempotent upsert of a CartItem into the cart, keyed by publishedId.
  *
- * When the publishedId is already present, the existing entry's addedAt is kept frozen
- * (first-add timestamp is preserved) while addedRev, draftId, documentType, and isNew
- * are advanced to the incoming item's values.
+ * When the publishedId is already present, the existing entry's `addedAt` is kept frozen
+ * (first-add timestamp is preserved) while `addedRev`, `draftId`, `documentType`, and `isNew`
+ * are advanced to the incoming item's values. `baselineRev` and `changedUnderneath` are also
+ * preserved from the existing entry on re-add — a membership re-affirmation must not reset the
+ * flag or the moving baseline.
  *
- * When the publishedId is absent, the item is appended as-is.
+ * When the publishedId is absent, the item is appended as-is (caller must supply `baselineRev`
+ * seeded from the current draft rev and `changedUnderneath` as false).
  *
  * Always returns a new array; the input cart is never mutated.
  *
@@ -31,6 +34,8 @@ export function addItem(cart: CartItem[], item: CartItem, _now: string): CartIte
         return {
           ...item,
           addedAt: existing.addedAt,
+          baselineRev: existing.baselineRev,
+          changedUnderneath: existing.changedUnderneath,
         }
       }
       return existing

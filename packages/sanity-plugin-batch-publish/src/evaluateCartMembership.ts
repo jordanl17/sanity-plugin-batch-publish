@@ -54,6 +54,8 @@ function buildCartItem(
     draftId: snapshot.draft._id,
     documentType: snapshot.documentType,
     addedRev: snapshot.draft._rev,
+    baselineRev: snapshot.draft._rev,
+    changedUnderneath: false,
     isNew: snapshot.published === null,
     addedAt: now,
   }

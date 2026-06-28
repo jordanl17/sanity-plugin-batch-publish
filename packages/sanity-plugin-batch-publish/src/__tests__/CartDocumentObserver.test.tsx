@@ -269,6 +269,8 @@ describe('CartDocumentObserver - ready === false guard (definitive: false)', () 
       draftId: 'drafts.doc-tracked',
       documentType: 'article',
       addedRev: 'rev-001',
+      baselineRev: 'rev-001',
+      changedUnderneath: false,
       isNew: false,
       addedAt: '2026-01-01T00:00:00.000Z',
     }

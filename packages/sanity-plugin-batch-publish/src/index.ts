@@ -4,6 +4,12 @@ import {makeCartBootRevalidator} from './CartBootRevalidator'
 import {makeCartDocumentObserver} from './CartDocumentObserver'
 import type {BatchPublishPluginConfig} from './types'
 
+export {
+  applyRemoteRevChange,
+  clearFlagAndAdvanceBaseline,
+  shouldFlagChangedUnderneath,
+} from './cartFlag'
+export type {ShouldFlagParams} from './cartFlag'
 export {addItem, hasItem, removeItem} from './cartSet'
 export {
   buildMembershipSnapshot,

@@ -11,6 +11,8 @@ function makeCartItem(publishedId: string, addedRev = 'rev-abc'): CartItem {
     draftId: `drafts.${publishedId}`,
     documentType: 'article',
     addedRev,
+    baselineRev: addedRev,
+    changedUnderneath: false,
     isNew: false,
     addedAt: '2026-01-01T00:00:00.000Z',
   }
