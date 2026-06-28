@@ -145,12 +145,15 @@ function makeTrackedItem(publishedId = 'doc-1') {
 
 function makeCartStore(initialItems: ReturnType<typeof makeTrackedItem>[] = []) {
   const applyDecisionSpy = vi.fn()
-  return {
+  const markChangedUnderneathSpy = vi.fn()
+  const store = {
     getItems: vi.fn(() => initialItems),
     applyDecision: applyDecisionSpy,
+    markChangedUnderneath: markChangedUnderneathSpy,
     subscribe: vi.fn(() => () => undefined),
     destroy: vi.fn(),
   }
+  return store
 }
 
 function makeDocumentStore(
@@ -644,5 +647,115 @@ describe('revalidateCartOnBoot (async editState emission)', () => {
     observables.forEach((observable) => {
       expect(observable.unsubscribeSpy).toHaveBeenCalledTimes(1)
     })
+  })
+})
+
+// ---- boot-time divergence flagging tests ------------------------------------
+//
+// When the boot sweep reads editState, it compares the live draft._rev against the
+// stored baselineRev. Divergence at boot is treated as a remote change (the user did
+// not advance the baseline while the tab was closed), so markChangedUnderneath is
+// called with isCurrentUserAuthor: false. A non-confident read or a removed item
+// must never trigger a flag.
+
+describe('revalidateCartOnBoot - boot-time baseline divergence', () => {
+  it('flags an item whose draft rev diverged from its stored baselineRev at boot', async () => {
+    const publishedId = 'doc-diverged'
+    const draftRev = 'rev-new'
+    const baselineRev = 'rev-old'
+
+    const editState: EditStateShape = {
+      draft: {
+        _id: `drafts.${publishedId}`,
+        _rev: draftRev,
+        _type: 'article',
+        title: 'edited while tab was closed',
+      },
+      published: null,
+      liveEditSchemaType: false,
+      ready: true,
+    }
+    const observable = makeAsyncSingleValueObservable(editState)
+    const docStore = {pair: {editState: vi.fn(() => observable)}}
+    const item = {...makeTrackedItem(publishedId), baselineRev}
+    const cartStore = makeCartStore([item])
+
+    await revalidateCartOnBoot(docStore as never, cartStore as never, cartStore.getItems())
+
+    expect(cartStore.markChangedUnderneath).toHaveBeenCalledWith(publishedId, draftRev, false)
+  })
+
+  it('does not flag an item whose draft rev equals its stored baselineRev', async () => {
+    const publishedId = 'doc-unchanged'
+    const rev = 'rev-same'
+
+    const editState: EditStateShape = {
+      draft: {
+        _id: `drafts.${publishedId}`,
+        _rev: rev,
+        _type: 'article',
+        title: 'content',
+      },
+      published: null,
+      liveEditSchemaType: false,
+      ready: true,
+    }
+    const observable = makeAsyncSingleValueObservable(editState)
+    const docStore = {pair: {editState: vi.fn(() => observable)}}
+    const item = {...makeTrackedItem(publishedId), baselineRev: rev}
+    const cartStore = makeCartStore([item])
+
+    await revalidateCartOnBoot(docStore as never, cartStore as never, cartStore.getItems())
+
+    // markChangedUnderneath may be called to resolve no-flag, but must not have been
+    // called with isCurrentUserAuthor: false (which would set the flag)
+    const flaggingCalls = (
+      cartStore.markChangedUnderneath as ReturnType<typeof vi.fn>
+    ).mock.calls.filter((args: unknown[]) => args[2] === false)
+    expect(flaggingCalls).toHaveLength(0)
+  })
+
+  it('does not flag an item when the boot read was non-confident (transient guard)', async () => {
+    const publishedId = 'doc-non-confident'
+    const neverObservable = makeNeverObservable<EditStateShape>()
+    const docStore = {pair: {editState: vi.fn(() => neverObservable)}}
+    const item = {...makeTrackedItem(publishedId), baselineRev: 'rev-stored'}
+    const cartStore = makeCartStore([item])
+
+    await revalidateCartOnBoot(
+      docStore as never,
+      cartStore as never,
+      cartStore.getItems(),
+      undefined,
+      {readTimeoutMs: 50},
+    )
+
+    expect(cartStore.markChangedUnderneath).not.toHaveBeenCalled()
+  })
+
+  it('does not flag a removed item (removal wins over divergence flagging)', async () => {
+    const publishedId = 'doc-stale-diverged'
+
+    const editState: EditStateShape = {
+      // Draft is null — membership decision will be remove
+      draft: null,
+      published: {_id: publishedId, _rev: 'pub-rev', _type: 'article'},
+      liveEditSchemaType: false,
+      ready: true,
+    }
+    const observable = makeAsyncSingleValueObservable(editState)
+    const docStore = {pair: {editState: vi.fn(() => observable)}}
+    // baselineRev differs from any draft rev (though draft is null here)
+    const item = {...makeTrackedItem(publishedId), baselineRev: 'rev-old'}
+    const cartStore = makeCartStore([item])
+
+    await revalidateCartOnBoot(docStore as never, cartStore as never, cartStore.getItems())
+
+    // Membership remove was applied
+    expect(cartStore.applyDecision).toHaveBeenCalledWith(
+      expect.objectContaining({action: 'remove', publishedId}),
+    )
+    // No flag was set
+    expect(cartStore.markChangedUnderneath).not.toHaveBeenCalled()
   })
 })
