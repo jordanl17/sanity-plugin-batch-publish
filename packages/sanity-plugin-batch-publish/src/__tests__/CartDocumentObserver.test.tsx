@@ -1,8 +1,7 @@
 import {cleanup, render, renderHook, act} from '@testing-library/react'
-import {Observable, Subject} from 'rxjs'
 import {afterEach, describe, expect, it, vi} from 'vitest'
 
-import {makeCartDocumentObserver} from '../CartDocumentObserver'
+import {makeCartDocumentObserver, clearCartStoreRegistry} from '../CartDocumentObserver'
 import {useCart} from '../useCart'
 
 // ---- Mocks ----------------------------------------------------------------
@@ -30,15 +29,60 @@ vi.mock('../cartStorage', () => ({
 
 // ---- Helpers ---------------------------------------------------------------
 
-import {useWorkspace, useCurrentUser, useDocumentStore, useSchema, isLiveEditEnabled} from 'sanity'
+import {useWorkspace, useCurrentUser, useDocumentStore, useSchema} from 'sanity'
 import {writeCart, readCart} from '../cartStorage'
 
 const mockUseWorkspace = vi.mocked(useWorkspace)
 const mockUseCurrentUser = vi.mocked(useCurrentUser)
 const mockUseDocumentStore = vi.mocked(useDocumentStore)
 const mockUseSchema = vi.mocked(useSchema)
-const mockIsLiveEditEnabled = vi.mocked(isLiveEditEnabled)
 const mockWriteCart = vi.mocked(writeCart)
+
+/**
+ * Minimal observable subject for testing: collects subscribers and lets tests emit events.
+ */
+function makeTestSubject<T>() {
+  const subscribers: Array<(value: T) => void> = []
+  return {
+    subscribe(observer: (value: T) => void) {
+      subscribers.push(observer)
+      return {
+        unsubscribe() {
+          const idx = subscribers.indexOf(observer)
+          if (idx !== -1) subscribers.splice(idx, 1)
+        },
+      }
+    },
+    next(value: T) {
+      subscribers.forEach((observer) => observer(value))
+    },
+    asObservable() {
+      return {
+        subscribe(observer: (value: T) => void) {
+          subscribers.push(observer)
+          return {
+            unsubscribe() {
+              const idx = subscribers.indexOf(observer)
+              if (idx !== -1) subscribers.splice(idx, 1)
+            },
+          }
+        },
+      }
+    },
+  }
+}
+
+/**
+ * Minimal single-value observable for editState (emits once on subscribe).
+ */
+function makeSingleValueObservable<T>(value: T) {
+  return {
+    subscribe(observer: (value: T) => void) {
+      observer(value)
+      return {unsubscribe() {}}
+    },
+  }
+}
 
 function makeWorkspace() {
   return {projectId: 'proj1', dataset: 'production', name: 'default'} as ReturnType<
@@ -81,19 +125,16 @@ function makeEditStateSnapshot(opts: {
   }
 }
 
+type EventPayload = {type: string; origin?: string; document?: unknown}
+
 function buildDocumentStore(
-  eventSubject: Subject<{type: string; origin?: string; document?: unknown}>,
+  eventSubject: ReturnType<typeof makeTestSubject<EventPayload>>,
   editStateSnapshot: unknown,
 ) {
   return {
     pair: {
       documentEvents: vi.fn(() => eventSubject.asObservable()),
-      editState: vi.fn(
-        () =>
-          new Observable((subscriber) => {
-            subscriber.next(editStateSnapshot)
-          }),
-      ),
+      editState: vi.fn(() => makeSingleValueObservable(editStateSnapshot)),
     },
   } as unknown as ReturnType<typeof useDocumentStore>
 }
@@ -103,19 +144,19 @@ function buildDocumentStore(
 afterEach(() => {
   cleanup()
   localStorage.clear()
+  clearCartStoreRegistry()
   vi.clearAllMocks()
 })
 
 describe('CartDocumentObserver - render output', () => {
   it('renders the renderDefault output unchanged', () => {
-    const eventSubject = new Subject<{type: string; origin?: string}>()
+    const eventSubject = makeTestSubject<EventPayload>()
     const editState = makeEditStateSnapshot({draftId: 'drafts.doc-1', publishedId: 'doc-1'})
 
     mockUseWorkspace.mockReturnValue(makeWorkspace())
     mockUseCurrentUser.mockReturnValue(makeCurrentUser())
     mockUseDocumentStore.mockReturnValue(buildDocumentStore(eventSubject, editState))
     mockUseSchema.mockReturnValue({} as ReturnType<typeof useSchema>)
-    mockIsLiveEditEnabled.mockReturnValue(false)
 
     const CartDocumentObserver = makeCartDocumentObserver()
 
@@ -135,10 +176,10 @@ describe('CartDocumentObserver - render output', () => {
 
 describe('CartDocumentObserver - local mutation auto-add', () => {
   it('adds to the cart when a local mutation event fires for a qualifying draft', async () => {
-    const eventSubject = new Subject<{type: string; origin?: string; document?: unknown}>()
+    const eventSubject = makeTestSubject<EventPayload>()
     const editState = makeEditStateSnapshot({
-      draftId: 'drafts.doc-1',
-      publishedId: 'doc-1',
+      draftId: 'drafts.doc-2',
+      publishedId: 'doc-2',
       ready: true,
     })
 
@@ -146,14 +187,13 @@ describe('CartDocumentObserver - local mutation auto-add', () => {
     mockUseCurrentUser.mockReturnValue(makeCurrentUser())
     mockUseDocumentStore.mockReturnValue(buildDocumentStore(eventSubject, editState))
     mockUseSchema.mockReturnValue({} as ReturnType<typeof useSchema>)
-    mockIsLiveEditEnabled.mockReturnValue(false)
     vi.mocked(readCart).mockReturnValue([])
 
     const CartDocumentObserver = makeCartDocumentObserver()
 
     const renderDefault = vi.fn(() => <div>pane</div>)
     const props = {
-      documentId: 'drafts.doc-1',
+      documentId: 'drafts.doc-2',
       documentType: 'article',
       renderDefault,
     }
@@ -165,7 +205,7 @@ describe('CartDocumentObserver - local mutation auto-add', () => {
         type: 'mutation',
         origin: 'local',
         document: {
-          _id: 'drafts.doc-1',
+          _id: 'drafts.doc-2',
           _rev: 'rev-001',
           _type: 'article',
           content: 'some content',
@@ -176,15 +216,15 @@ describe('CartDocumentObserver - local mutation auto-add', () => {
     expect(mockWriteCart).toHaveBeenCalled()
     const callArgs = mockWriteCart.mock.calls[0]
     expect(callArgs[1]).toHaveLength(1)
-    expect(callArgs[1][0].publishedId).toBe('doc-1')
-    expect(callArgs[1][0].draftId).toBe('drafts.doc-1')
+    expect(callArgs[1][0].publishedId).toBe('doc-2')
+    expect(callArgs[1][0].draftId).toBe('drafts.doc-2')
   })
 
   it('does NOT add to the cart when a remote mutation event fires', async () => {
-    const eventSubject = new Subject<{type: string; origin?: string; document?: unknown}>()
+    const eventSubject = makeTestSubject<EventPayload>()
     const editState = makeEditStateSnapshot({
-      draftId: 'drafts.doc-1',
-      publishedId: 'doc-1',
+      draftId: 'drafts.doc-3',
+      publishedId: 'doc-3',
       ready: true,
     })
 
@@ -192,14 +232,13 @@ describe('CartDocumentObserver - local mutation auto-add', () => {
     mockUseCurrentUser.mockReturnValue(makeCurrentUser())
     mockUseDocumentStore.mockReturnValue(buildDocumentStore(eventSubject, editState))
     mockUseSchema.mockReturnValue({} as ReturnType<typeof useSchema>)
-    mockIsLiveEditEnabled.mockReturnValue(false)
 
     const CartDocumentObserver = makeCartDocumentObserver()
 
     const renderDefault = vi.fn(() => <div>pane</div>)
     render(
       <CartDocumentObserver
-        {...{documentId: 'drafts.doc-1', documentType: 'article', renderDefault}}
+        {...{documentId: 'drafts.doc-3', documentType: 'article', renderDefault}}
       />,
     )
 
@@ -207,7 +246,7 @@ describe('CartDocumentObserver - local mutation auto-add', () => {
       eventSubject.next({
         type: 'mutation',
         origin: 'remote',
-        document: {_id: 'drafts.doc-1', _rev: 'rev-001', _type: 'article', content: 'content'},
+        document: {_id: 'drafts.doc-3', _rev: 'rev-001', _type: 'article', content: 'content'},
       })
     })
 
@@ -217,7 +256,7 @@ describe('CartDocumentObserver - local mutation auto-add', () => {
 
 describe('CartDocumentObserver - ready === false guard (definitive: false)', () => {
   it('does not remove a tracked item when editState.ready is false', async () => {
-    const eventSubject = new Subject<{type: string; origin?: string; document?: unknown}>()
+    const eventSubject = makeTestSubject<EventPayload>()
     const editState = makeEditStateSnapshot({
       draftId: 'drafts.doc-tracked',
       publishedId: 'doc-tracked',
@@ -239,7 +278,6 @@ describe('CartDocumentObserver - ready === false guard (definitive: false)', () 
     mockUseCurrentUser.mockReturnValue(makeCurrentUser())
     mockUseDocumentStore.mockReturnValue(buildDocumentStore(eventSubject, editState))
     mockUseSchema.mockReturnValue({} as ReturnType<typeof useSchema>)
-    mockIsLiveEditEnabled.mockReturnValue(false)
 
     const CartDocumentObserver = makeCartDocumentObserver()
 
@@ -258,7 +296,7 @@ describe('CartDocumentObserver - ready === false guard (definitive: false)', () 
       })
     })
 
-    // writeCart should NOT have been called to remove the item
+    // writeCart should NOT have been called to remove the item (definitive:false -> keep)
     const removeCalls = mockWriteCart.mock.calls.filter((callArgs) => callArgs[1].length === 0)
     expect(removeCalls).toHaveLength(0)
   })
@@ -273,7 +311,7 @@ describe('CartDocumentObserver - unmount cleanup', () => {
     const documentStore = {
       pair: {
         documentEvents: vi.fn(() => ({subscribe: mockSubscribe})),
-        editState: vi.fn(() => new Observable((sub) => sub.next(editState))),
+        editState: vi.fn(() => makeSingleValueObservable(editState)),
       },
     } as unknown as ReturnType<typeof useDocumentStore>
 
@@ -281,7 +319,6 @@ describe('CartDocumentObserver - unmount cleanup', () => {
     mockUseCurrentUser.mockReturnValue(makeCurrentUser())
     mockUseDocumentStore.mockReturnValue(documentStore)
     mockUseSchema.mockReturnValue({} as ReturnType<typeof useSchema>)
-    mockIsLiveEditEnabled.mockReturnValue(false)
 
     const CartDocumentObserver = makeCartDocumentObserver()
     const renderDefault = vi.fn(() => <div>pane</div>)
@@ -313,7 +350,7 @@ describe('CartDocumentObserver - no user (no-op)', () => {
 })
 
 describe('useCart - hook', () => {
-  it('returns items from the cart store and re-renders when items change', async () => {
+  it('returns items from the cart store', () => {
     vi.mocked(readCart).mockReturnValue([])
 
     mockUseWorkspace.mockReturnValue(makeWorkspace())
