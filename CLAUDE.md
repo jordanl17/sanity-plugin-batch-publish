@@ -16,6 +16,34 @@ Turborepo monorepo with one publishable npm package and a dev studio app.
 | -------- | ------------- | ------------------------------------ |
 | `studio` | `apps/studio` | Dev Sanity Studio for testing plugin |
 
+## Feature: Batch Publish Cart
+
+The plugin tracks draft documents an editor amends during a Studio session - a "cart" of
+pending changes - then publishes the set together. Full design and the grounded Studio API
+map: [`docs/batch-publish-cart.md`](docs/batch-publish-cart.md) and
+[`.claude/rules/sanity-internals.md`](.claude/rules/sanity-internals.md).
+
+Agreed behaviour (do not violate these invariants):
+
+- **Candidates only:** include only amended plain drafts (`drafts.<id>`). Never include
+  release versions (`versions.<release>.<id>`) or `liveEdit` (drafts-disabled) types.
+- **Auto-track, idempotent:** qualifying drafts the current user edits this session are added
+  automatically (on the document store's `DocumentMutationEvent.origin === 'local'`); the cart
+  is a set keyed by published ID, so repeated edits add a doc once.
+- **localStorage only:** session-specific, private to the browser, survives reload; no dataset
+  persistence. Re-hydrate and re-validate on load.
+- **New vs updated:** brand-new drafts (no published version yet) are valid and flagged as new.
+- **Stops qualifying -> silently remove** (discarded, published elsewhere, or reverted to match).
+- **Concurrency:** snapshot `draft._rev` on add; the user's own continued edits advance the
+  baseline; flag items changed by anyone else (`DocumentRemoteMutationEvent.author !==
+useCurrentUser().id`); use `ifPublishedRevisionId` as the publish-time optimistic lock.
+- **Block-upfront publishing:** the batch action is disabled until every item is valid and the
+  user is permitted; removing an item is the escape hatch. Execution is best-effort with
+  per-item success/failure reporting.
+- **UI:** navbar count indicator (top-right, via `studio.components.navbar`) linking to a
+  dedicated cart tool. No floating overlay. Build all UI with `@sanity/ui` (and `@sanity/icons`).
+- **Config:** optional allowlist/denylist of document types; zero-config tracks all draftable types.
+
 ## Commands
 
 | Command               | Description                       |
