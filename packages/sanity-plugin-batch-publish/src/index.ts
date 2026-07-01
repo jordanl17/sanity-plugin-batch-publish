@@ -1,10 +1,68 @@
+import {BasketIcon} from '@sanity/icons'
+import {lazy} from 'react'
 import {definePlugin} from 'sanity'
 
+import {makeCartDocumentObserver} from './CartDocumentObserver'
+import {makeCartStudioLayout} from './CartStudioLayout'
 import type {BatchPublishPluginConfig} from './types'
 
+export {
+  applyRemoteRevChange,
+  clearFlagAndAdvanceBaseline,
+  shouldFlagChangedUnderneath,
+} from './cartFlag'
+export type {ShouldFlagParams} from './cartFlag'
+export {addItem, hasItem, removeItem} from './cartSet'
+export {
+  buildMembershipSnapshot,
+  draftHasRealContent,
+  snapshotsMatchIgnoringMeta,
+} from './cartSnapshot'
+export type {
+  BuildMembershipSnapshotParams,
+  EditStateSnapshot,
+  SanityDocumentSnapshot,
+} from './cartSnapshot'
+export {buildCartStorageKey, readCart, writeCart, subscribeToCartStorage} from './cartStorage'
+export {createCartStore} from './cartStore'
+export type {CartStore} from './cartStore'
+export {CartBootRevalidator, makeCartBootRevalidator} from './CartBootRevalidator'
+export {CartRemoteWatcher, makeCartRemoteWatcher} from './CartRemoteWatcher'
+export {createCartRemoteWatcher} from './createCartRemoteWatcher'
+export type {CartRemoteWatcherParams} from './createCartRemoteWatcher'
+export {CartDocumentObserver} from './CartDocumentObserver'
+export {evaluateCartMembership} from './evaluateCartMembership'
+export type {CartMembershipDecision, CartMembershipSnapshot} from './evaluateCartMembership'
+export {isCartCandidate} from './isCartCandidate'
+export type {CartCandidateInput} from './isCartCandidate'
+export {revalidateCartOnBoot} from './revalidateCartOnBoot'
+export type {RevalidateCartOnBootOptions} from './revalidateCartOnBoot'
+export type {BatchPublishPluginConfig, CartItem} from './types'
+export {useCart} from './useCart'
+export {BatchPublishCartTool} from './BatchPublishCartTool'
+export {formatAddedAt} from './formatAddedAt'
+
 /** @public */
-export const batchPublishPlugin = definePlugin<BatchPublishPluginConfig | void>((_config) => {
+export const batchPublish = definePlugin<BatchPublishPluginConfig | void>((config) => {
   return {
     name: 'sanity-plugin-batch-publish',
+    document: {
+      components: {
+        unstable_layout: makeCartDocumentObserver(config ?? undefined),
+      },
+    },
+    studio: {
+      components: {
+        layout: makeCartStudioLayout(config ?? undefined),
+      },
+    },
+    tools: [
+      {
+        name: 'batch-publish',
+        title: 'Batch Publish',
+        icon: BasketIcon,
+        component: lazy(() => import('./BatchPublishCartTool')),
+      },
+    ],
   }
 })
