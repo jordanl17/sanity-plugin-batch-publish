@@ -67,10 +67,15 @@ function useScrolledPastTop(itemCount: number): {
   return {anchorRef, scrolled}
 }
 
+const headerLabelStyle: React.CSSProperties = {
+  textTransform: 'uppercase',
+  letterSpacing: '0.07em',
+}
+
 function HeaderLabel({text}: {text: string}): React.JSX.Element {
   return (
-    <Box padding={2}>
-      <Text muted size={1} weight="medium">
+    <Box paddingX={2} paddingY={4}>
+      <Text muted size={0} weight="semibold" style={headerLabelStyle}>
         {text}
       </Text>
     </Box>
