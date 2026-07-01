@@ -9,17 +9,24 @@ import type {CartItem} from './types'
 const EMPTY_ITEMS: CartItem[] = []
 
 /**
- * Exposes the singleton cart store's current items to React consumers.
+ * Exposes the singleton cart store's current items to React consumers and provides a
+ * `remove` action to exclude an item from the cart.
  *
  * Resolves the scoped storage key from the current workspace and logged-in user,
  * then subscribes to the shared CartStore via `useSyncExternalStore` so the component
  * re-renders whenever the cart changes (from local edits or cross-tab sync).
  *
- * Returns `{items: []}` when no user is logged in (no scoped key can be derived).
+ * `remove(publishedId)` excludes the item with the given publishedId from the cart via
+ * `applyDecision({action: 'remove'})`. It is a safe no-op when no user is logged in.
+ *
+ * Returns `{items: [], remove}` when no user is logged in (no scoped key can be derived).
  *
  * @public
  */
-export function useCart(_config?: BatchPublishPluginConfig): {items: CartItem[]} {
+export function useCart(_config?: BatchPublishPluginConfig): {
+  items: CartItem[]
+  remove: (publishedId: string) => void
+} {
   const workspace = useWorkspace()
   const currentUser = useCurrentUser()
 
@@ -34,6 +41,10 @@ export function useCart(_config?: BatchPublishPluginConfig): {items: CartItem[]}
       : null
 
   const cartStore = storageKey !== null ? getCartStore(storageKey) : null
+
+  function remove(publishedId: string): void {
+    cartStore?.applyDecision({action: 'remove', publishedId})
+  }
 
   const items = useSyncExternalStore(
     cartStore !== null
@@ -51,8 +62,8 @@ export function useCart(_config?: BatchPublishPluginConfig): {items: CartItem[]}
   )
 
   if (cartStore === null) {
-    return {items: EMPTY_ITEMS}
+    return {items: EMPTY_ITEMS, remove}
   }
 
-  return {items}
+  return {items, remove}
 }
