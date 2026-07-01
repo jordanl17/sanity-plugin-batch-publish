@@ -138,15 +138,21 @@ export function CartItemRow({item, onRemove}: CartItemRowProps): React.JSX.Eleme
         </Box>
 
         <Flex align="center" justify="center" paddingRight={2}>
-          <Popover open={confirmOpen} content={popoverContent} portal placement="bottom-end">
-            <Tooltip content={<Text size={1}>Remove from batch</Text>} portal placement="top">
-              <Button
-                icon={CloseIcon}
-                mode="bleed"
-                onClick={handleRemoveButtonClick}
-                aria-label="Remove from batch"
-              />
-            </Tooltip>
+          {/* Popover anchors directly to the Button so it opens at the row's remove control.
+              Nesting a Tooltip between the two steals the anchor ref and floats it to 0,0. */}
+          <Popover
+            open={confirmOpen}
+            content={popoverContent}
+            portal
+            placement="bottom-end"
+            fallbackPlacements={['top-end', 'left', 'bottom']}
+          >
+            <Button
+              icon={CloseIcon}
+              mode="bleed"
+              onClick={handleRemoveButtonClick}
+              aria-label="Remove from batch"
+            />
           </Popover>
         </Flex>
       </Box>

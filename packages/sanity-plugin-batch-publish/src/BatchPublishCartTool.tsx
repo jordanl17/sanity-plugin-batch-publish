@@ -10,6 +10,8 @@ interface BatchPublishCartToolProps {
   tool: Tool
 }
 
+// Sticky within the Studio tool's own scroll container so the column labels stay pinned to
+// the top as the rows scroll. An opaque tone keeps rows from bleeding through when stuck.
 const headerGridStyle: React.CSSProperties = {
   display: 'grid',
   gridTemplateColumns: CART_TABLE_GRID_TEMPLATE,
@@ -17,6 +19,12 @@ const headerGridStyle: React.CSSProperties = {
   position: 'sticky',
   top: 0,
   zIndex: 1,
+}
+
+const tableCardStyle: React.CSSProperties = {
+  maxWidth: '960px',
+  width: '100%',
+  margin: '0 auto',
 }
 
 function HeaderLabel({text}: {text: string}): React.JSX.Element {
@@ -31,7 +39,7 @@ function HeaderLabel({text}: {text: string}): React.JSX.Element {
 
 function CartTableHeader(): React.JSX.Element {
   return (
-    <Card borderBottom tone="transparent" style={headerGridStyle}>
+    <Card borderBottom tone="default" style={headerGridStyle}>
       <HeaderLabel text="Status" />
       <HeaderLabel text="Type" />
       <HeaderLabel text="Document" />
@@ -44,7 +52,7 @@ function CartTableHeader(): React.JSX.Element {
 /**
  * Studio tool that lists the current cart items newest-first as a compact table. Shows a
  * friendly empty state when no items are tracked; otherwise renders a bordered, column-aligned
- * table with a Status/Type/Document/Added header and one CartItemRow per item.
+ * table with a sticky Status/Type/Document/Added header and one CartItemRow per item.
  *
  * @public
  */
@@ -71,8 +79,8 @@ export function BatchPublishCartTool(_props: BatchPublishCartToolProps): React.J
   }
 
   return (
-    <Box padding={4} style={{height: '100%', overflow: 'auto'}}>
-      <Card radius={2} border style={{maxWidth: '960px', margin: '0 auto'}}>
+    <Box padding={4}>
+      <Card radius={2} border style={tableCardStyle}>
         <CartTableHeader />
         {sortedItems.map((item) => (
           <CartItemRow key={item.publishedId} item={item} onRemove={remove} />
