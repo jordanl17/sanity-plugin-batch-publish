@@ -86,6 +86,12 @@ export function makeCartDocumentObserver(config?: BatchPublishPluginConfig) {
     const {documentType} = props
 
     const editStateRef = useRef<EditStateSnapshot | null>(null)
+    // Tracks the most recent rev we have advanced the baseline to via ownByCurrentUser.
+    // Used to gate the committed-rev re-advance so we never call ownByCurrentUser redundantly.
+    const lastOwnedRevRef = useRef<string | null>(null)
+    // Set to true on a local mutation event; cleared once the subsequent editState emission
+    // carrying the committed (server-confirmed) rev has been consumed and the baseline re-advanced.
+    const pendingLocalEditRef = useRef(false)
 
     useEffect(() => {
       if (currentUser === null || currentUser === undefined) {
@@ -107,6 +113,23 @@ export function makeCartDocumentObserver(config?: BatchPublishPluginConfig) {
 
       const editStateSub = editStateObservable.subscribe((editState) => {
         editStateRef.current = editState
+
+        // When a local edit is pending, the next editState emission that carries a NEW rev
+        // is the committed rev arriving from the server. Re-advance the baseline to it so the
+        // boot-divergence sweep does not falsely flag the user's own edit after a reload.
+        // This path only fires when pendingLocalEditRef is true, so remote-driven editState
+        // rev changes (which never set pendingLocalEditRef) are never absorbed into the baseline.
+        const committedRev = editState.draft?._rev
+        if (
+          pendingLocalEditRef.current &&
+          committedRev !== undefined &&
+          committedRev !== lastOwnedRevRef.current &&
+          editState.draft !== null
+        ) {
+          cartStore.ownByCurrentUser(publishedId, committedRev)
+          lastOwnedRevRef.current = committedRev
+          pendingLocalEditRef.current = false
+        }
       })
 
       const documentEventsObservable = documentStore.pair.documentEvents(
@@ -158,9 +181,17 @@ export function makeCartDocumentObserver(config?: BatchPublishPluginConfig) {
         // A local mutation means the user owns the current state — clear any remote-change
         // flag and advance the baseline atomically so the remote-snapshot watcher does not
         // re-flag the user's own in-progress edits as external changes.
+        //
+        // We advance to whatever rev editStateRef.current holds now (the pre-commit rev).
+        // The committed rev arrives in a later editState emission; pendingLocalEditRef marks
+        // that the editStateSub handler should re-advance the baseline to that committed rev
+        // when it arrives. lastOwnedRevRef tracks the rev we advanced to so we can detect
+        // the later emission carrying a genuinely new rev.
         const currentDraftRev = editStateRef.current?.draft?._rev
         if (decision.action !== 'remove' && currentDraftRev !== undefined) {
           cartStore.ownByCurrentUser(publishedId, currentDraftRev)
+          lastOwnedRevRef.current = currentDraftRev
+          pendingLocalEditRef.current = true
         }
       })
 
