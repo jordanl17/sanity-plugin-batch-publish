@@ -16,13 +16,21 @@ const tableCardStyle: React.CSSProperties = {
   margin: '0 auto',
 }
 
+// The header block sticks at the very top of the Studio pane, but its opaque top spacer keeps a
+// persistent gap above the labels. Because the spacer is part of the sticky block it never
+// scrolls, so rows moving underneath it stay hidden rather than peeking through the gap.
+const STICKY_HEADER_TOP_GAP = '12px'
+
+const stickyHeaderStyle: React.CSSProperties = {
+  position: 'sticky',
+  top: 0,
+  zIndex: 1,
+}
+
 const headerGridStyle: React.CSSProperties = {
   display: 'grid',
   gridTemplateColumns: CART_TABLE_GRID_TEMPLATE,
   alignItems: 'center',
-  position: 'sticky',
-  top: 0,
-  zIndex: 1,
 }
 
 function findScrollParent(node: HTMLElement | null): HTMLElement | null {
@@ -84,12 +92,26 @@ function HeaderLabel({text}: {text: string}): React.JSX.Element {
 
 function CartTableHeader({scrolled}: {scrolled: boolean}): React.JSX.Element {
   return (
-    <Card borderBottom tone="default" shadow={scrolled ? 1 : 0} style={headerGridStyle}>
-      <HeaderLabel text="Status" />
-      <HeaderLabel text="Type" />
-      <HeaderLabel text="Document" />
-      <HeaderLabel text="Added" />
-      <Box />
+    <Card tone="default" style={stickyHeaderStyle}>
+      {/* Opaque spacer pinned above the labels: matches the pane background so scrolling rows
+          disappear behind it instead of showing through the gap. */}
+      <Card tone="default" style={{height: STICKY_HEADER_TOP_GAP}} />
+      <Card
+        borderTop
+        borderLeft
+        borderRight
+        borderBottom
+        radius={2}
+        tone="default"
+        shadow={scrolled ? 1 : 0}
+        style={headerGridStyle}
+      >
+        <HeaderLabel text="Status" />
+        <HeaderLabel text="Type" />
+        <HeaderLabel text="Document" />
+        <HeaderLabel text="Added" />
+        <Box />
+      </Card>
     </Card>
   )
 }
@@ -126,14 +148,16 @@ export function BatchPublishCartTool(_props: BatchPublishCartToolProps): React.J
   }
 
   return (
-    <Box padding={4}>
+    <Box paddingX={4} paddingBottom={4}>
       <div ref={anchorRef} />
-      <Card radius={2} border style={tableCardStyle}>
+      <Box style={tableCardStyle}>
         <CartTableHeader scrolled={scrolled} />
-        {sortedItems.map((item) => (
-          <CartItemRow key={item.publishedId} item={item} onRemove={remove} />
-        ))}
-      </Card>
+        <Card radius={2} borderLeft borderRight borderBottom>
+          {sortedItems.map((item) => (
+            <CartItemRow key={item.publishedId} item={item} onRemove={remove} />
+          ))}
+        </Card>
+      </Box>
     </Box>
   )
 }
