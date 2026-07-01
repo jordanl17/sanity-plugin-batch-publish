@@ -113,21 +113,23 @@ export function CartItemRow({item, onRemove}: CartItemRowProps): React.JSX.Eleme
           </Text>
         </Box>
 
-        {/* Anchor wraps ONLY the Preview cell — every other cell is a grid sibling.
-            Card + data-as="a" gives the same rounded hover/focus highlight as the releases tool. */}
-        <Card
-          as="a"
-          data-as="a"
-          href={href}
-          onClick={intentOnClick}
-          radius={2}
-          tone="inherit"
-          padding={1}
-          paddingRight={2}
-          style={{textDecoration: 'none', color: 'inherit', display: 'block', minWidth: 0}}
-        >
-          {previewContent}
-        </Card>
+        {/* The padded wrapper insets the hover Card from the row edges so its rounded corners
+            read clearly; the Card + data-as="a" gives the releases-style hover/focus highlight.
+            Anchor wraps ONLY the Preview — every other cell is a grid sibling. */}
+        <Box paddingY={2} paddingRight={2} style={{minWidth: 0}}>
+          <Card
+            as="a"
+            data-as="a"
+            href={href}
+            onClick={intentOnClick}
+            radius={3}
+            tone="inherit"
+            padding={2}
+            style={{textDecoration: 'none', color: 'inherit', display: 'block', minWidth: 0}}
+          >
+            {previewContent}
+          </Card>
+        </Box>
 
         <Box paddingX={2}>
           <Text size={1} muted>
