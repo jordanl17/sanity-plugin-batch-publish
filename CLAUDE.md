@@ -90,7 +90,14 @@ useCurrentUser().id`); use `ifPublishedRevisionId` as the publish-time optimisti
 
 ## Workflow
 
-- **Verification Before Done**: Never mark a task complete without proving it works - run `pnpm check && pnpm test`.
+- **Verification Before Done**: Never mark a task complete without proving it works. Two gates:
+  1. **Automated**: `pnpm check && pnpm test` pass, with tests covering the new logic.
+  2. **In-studio (Playwright MCP)**: run `pnpm run dev:studio` and drive the studio with the
+     Playwright MCP to confirm the change behaves as expected in a real Studio. Always confirm a
+     clean console (no errors/warnings). Inspect network calls (Actions API, mutations) and the
+     console where relevant; add temporary console logging to confirm internal state, then
+     remove it. Logic-only work verifies via boot + console/network/log inspection; UI work adds
+     click-through interaction testing.
 - **Simplicity First**: Minimal code impact. Find root causes. No temporary fixes.
 
 ## File Conventions
