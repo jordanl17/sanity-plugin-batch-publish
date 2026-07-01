@@ -1,3 +1,5 @@
+import {BasketIcon} from '@sanity/icons'
+import {lazy} from 'react'
 import {definePlugin} from 'sanity'
 
 import {makeCartDocumentObserver} from './CartDocumentObserver'
@@ -37,6 +39,8 @@ export {revalidateCartOnBoot} from './revalidateCartOnBoot'
 export type {RevalidateCartOnBootOptions} from './revalidateCartOnBoot'
 export type {BatchPublishPluginConfig, CartItem} from './types'
 export {useCart} from './useCart'
+export {BatchPublishCartTool} from './BatchPublishCartTool'
+export {formatAddedAt} from './formatAddedAt'
 
 /** @public */
 export const batchPublish = definePlugin<BatchPublishPluginConfig | void>((config) => {
@@ -52,5 +56,13 @@ export const batchPublish = definePlugin<BatchPublishPluginConfig | void>((confi
         layout: makeCartStudioLayout(config ?? undefined),
       },
     },
+    tools: [
+      {
+        name: 'batch-publish',
+        title: 'Batch Publish',
+        icon: BasketIcon,
+        component: lazy(() => import('./BatchPublishCartTool')),
+      },
+    ],
   }
 })
