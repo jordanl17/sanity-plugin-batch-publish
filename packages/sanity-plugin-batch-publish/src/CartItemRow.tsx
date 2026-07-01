@@ -6,6 +6,7 @@ import React, {useState} from 'react'
 import {Preview, useSchema} from 'sanity'
 import {useIntentLink} from 'sanity/router'
 
+import {CART_TABLE_GRID_TEMPLATE} from './cartTableColumns'
 import {formatAddedAt} from './formatAddedAt'
 import type {CartItem} from './types'
 
@@ -14,10 +15,24 @@ interface CartItemRowProps {
   onRemove: (publishedId: string) => void
 }
 
+const truncateStyle: React.CSSProperties = {
+  display: 'block',
+  whiteSpace: 'nowrap',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+}
+
+const rowGridStyle: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: CART_TABLE_GRID_TEMPLATE,
+  alignItems: 'center',
+}
+
 /**
- * Compact one-line row for a single cart item. Renders a clickable Preview that navigates
- * to the document editor, alongside addedAt time, New/Updated and optional caution badges,
- * and an isolated confirm-to-remove control.
+ * One table row for a single cart item, laid out across the shared column template:
+ * a Status badge (New/Updated, plus a caution "Changed" badge when the item was changed
+ * underneath), the document type, a clickable Preview that navigates to the editor, the
+ * relative time it was added, and an isolated confirm-to-remove control.
  *
  * @internal
  */
@@ -25,6 +40,7 @@ export function CartItemRow({item, onRemove}: CartItemRowProps): React.JSX.Eleme
   const [confirmOpen, setConfirmOpen] = useState(false)
   const schema = useSchema()
   const schemaType = schema.get(item.documentType)
+  const typeTitle = schemaType?.title ?? item.documentType
 
   const {onClick: intentOnClick, href} = useIntentLink({
     intent: 'edit',
@@ -53,12 +69,12 @@ export function CartItemRow({item, onRemove}: CartItemRowProps): React.JSX.Eleme
       <Preview value={{_id: item.draftId}} schemaType={schemaType} layout="default" />
     ) : (
       <Text size={1} muted>
-        {item.documentType}
+        <span style={truncateStyle}>{item.documentType}</span>
       </Text>
     )
 
   const popoverContent = (
-    <Stack padding={3} space={3}>
+    <Stack padding={3} space={3} style={{maxWidth: 260}}>
       <Text size={1}>
         Remove from batch? The draft is kept unchanged. You can re-add it by editing the document.
       </Text>
@@ -69,47 +85,65 @@ export function CartItemRow({item, onRemove}: CartItemRowProps): React.JSX.Eleme
     </Stack>
   )
 
+  const changedBadge = item.changedUnderneath ? (
+    <Tooltip
+      content={<Text size={1}>Someone edited this since you added it - review or remove.</Text>}
+      portal
+      placement="top"
+    >
+      <Badge radius={2} tone="caution">
+        Changed
+      </Badge>
+    </Tooltip>
+  ) : null
+
   return (
-    <Card padding={3} borderBottom>
-      <Stack space={2}>
-        <Flex align="center" gap={3}>
-          {/* Anchor wraps ONLY the Preview — badges, addedAt, and the remove button are siblings */}
-          <Box
-            flex={1}
-            as="a"
-            href={href}
-            onClick={intentOnClick}
-            style={{textDecoration: 'none', display: 'block'}}
-          >
-            {previewContent}
-          </Box>
+    <Card borderBottom>
+      <Box style={rowGridStyle}>
+        <Flex align="center" gap={2} paddingX={2} paddingY={3} wrap="wrap">
+          <Badge radius={2} tone={item.isNew ? 'positive' : 'primary'}>
+            {item.isNew ? 'New' : 'Updated'}
+          </Badge>
+          {changedBadge}
+        </Flex>
 
+        <Box paddingX={2} style={{minWidth: 0}}>
           <Text size={1} muted>
-            {formatAddedAt(item.addedAt)}
+            <span style={truncateStyle}>{typeTitle}</span>
           </Text>
+        </Box>
 
-          <Badge tone={item.isNew ? 'positive' : 'primary'}>{item.isNew ? 'New' : 'Updated'}</Badge>
+        {/* Anchor wraps ONLY the Preview cell — every other cell is a grid sibling */}
+        <Box
+          as="a"
+          href={href}
+          onClick={intentOnClick}
+          padding={1}
+          paddingRight={2}
+          style={{textDecoration: 'none', color: 'inherit', display: 'block', minWidth: 0}}
+        >
+          {previewContent}
+        </Box>
 
-          {item.changedUnderneath ? <Badge tone="caution">Changed</Badge> : null}
+        <Box paddingX={2}>
+          <Text size={1} muted>
+            <span style={truncateStyle}>{formatAddedAt(item.addedAt)}</span>
+          </Text>
+        </Box>
 
-          <Popover open={confirmOpen} content={popoverContent} portal>
+        <Flex align="center" justify="center" paddingRight={2}>
+          <Popover open={confirmOpen} content={popoverContent} portal placement="bottom-end">
             <Tooltip content={<Text size={1}>Remove from batch</Text>} portal placement="top">
               <Button
                 icon={CloseIcon}
-                mode="ghost"
+                mode="bleed"
                 onClick={handleRemoveButtonClick}
                 aria-label="Remove from batch"
               />
             </Tooltip>
           </Popover>
         </Flex>
-
-        {item.changedUnderneath ? (
-          <Text size={1} muted>
-            Someone edited this since you added it - review or remove.
-          </Text>
-        ) : null}
-      </Stack>
+      </Box>
     </Card>
   )
 }

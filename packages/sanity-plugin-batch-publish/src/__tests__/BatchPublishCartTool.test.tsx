@@ -13,7 +13,7 @@ vi.mock('sanity', () => ({
   Preview: function PreviewStub() {
     return React.createElement('div', {'data-testid': 'preview'})
   },
-  useSchema: vi.fn(() => ({get: () => ({name: 'article'})})),
+  useSchema: vi.fn(() => ({get: () => ({name: 'article', title: 'Article'})})),
 }))
 
 // Stub 'sanity/router' so useIntentLink resolves without the Studio router.
@@ -119,15 +119,25 @@ describe('BatchPublishCartTool', () => {
     expect(screen.getByText('Updated')).toBeTruthy()
   })
 
-  it('shows the caution badge and helper text for a changed-underneath item', () => {
+  it('shows a single caution badge only for the changed-underneath item', () => {
     const flaggedItem = buildItem({publishedId: 'doc-flagged', changedUnderneath: true})
     const cleanItem = buildItem({publishedId: 'doc-clean', changedUnderneath: false})
     mockUseCart.mockReturnValue({items: [flaggedItem, cleanItem], remove: vi.fn()})
 
     renderWithTheme(React.createElement(BatchPublishCartTool, {tool: TOOL_STUB}))
 
-    expect(screen.getByText('Changed')).toBeTruthy()
-    expect(screen.getByText(/review or remove/i)).toBeTruthy()
+    // The caution "Changed" badge renders once (only the flagged item); the review-or-remove
+    // guidance now lives in the badge's tooltip, which is portalled and not in the DOM until hover.
+    expect(screen.getAllByText('Changed')).toHaveLength(1)
+  })
+
+  it('shows the resolved document type title in the Type column', () => {
+    const item = buildItem({publishedId: 'doc-type'})
+    mockUseCart.mockReturnValue({items: [item], remove: vi.fn()})
+
+    renderWithTheme(React.createElement(BatchPublishCartTool, {tool: TOOL_STUB}))
+
+    expect(screen.getByText('Article')).toBeTruthy()
   })
 
   it('calls remove with the publishedId after the user confirms removal', () => {

@@ -2,6 +2,7 @@ import {Box, Card, Flex, Stack, Text} from '@sanity/ui'
 import React from 'react'
 import type {Tool} from 'sanity'
 
+import {CART_TABLE_GRID_TEMPLATE} from './cartTableColumns'
 import {CartItemRow} from './CartItemRow'
 import {useCart} from './useCart'
 
@@ -9,9 +10,41 @@ interface BatchPublishCartToolProps {
   tool: Tool
 }
 
+const headerGridStyle: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: CART_TABLE_GRID_TEMPLATE,
+  alignItems: 'center',
+  position: 'sticky',
+  top: 0,
+  zIndex: 1,
+}
+
+function HeaderLabel({text}: {text: string}): React.JSX.Element {
+  return (
+    <Box padding={2}>
+      <Text muted size={1} weight="medium">
+        {text}
+      </Text>
+    </Box>
+  )
+}
+
+function CartTableHeader(): React.JSX.Element {
+  return (
+    <Card borderBottom tone="transparent" style={headerGridStyle}>
+      <HeaderLabel text="Status" />
+      <HeaderLabel text="Type" />
+      <HeaderLabel text="Document" />
+      <HeaderLabel text="Added" />
+      <Box />
+    </Card>
+  )
+}
+
 /**
- * Studio tool that lists the current cart items newest-first. Shows a friendly empty state
- * when no items are tracked; otherwise renders a scrollable list of CartItemRow entries.
+ * Studio tool that lists the current cart items newest-first as a compact table. Shows a
+ * friendly empty state when no items are tracked; otherwise renders a bordered, column-aligned
+ * table with a Status/Type/Document/Added header and one CartItemRow per item.
  *
  * @public
  */
@@ -38,8 +71,9 @@ export function BatchPublishCartTool(_props: BatchPublishCartToolProps): React.J
   }
 
   return (
-    <Box paddingY={4} style={{maxWidth: '860px', margin: '0 auto'}}>
-      <Card>
+    <Box padding={4} style={{height: '100%', overflow: 'auto'}}>
+      <Card radius={2} border style={{maxWidth: '960px', margin: '0 auto'}}>
+        <CartTableHeader />
         {sortedItems.map((item) => (
           <CartItemRow key={item.publishedId} item={item} onRemove={remove} />
         ))}
