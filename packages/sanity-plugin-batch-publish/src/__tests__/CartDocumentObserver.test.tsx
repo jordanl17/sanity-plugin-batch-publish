@@ -467,3 +467,182 @@ describe('useCart - hook', () => {
     expect(result.current.items).toEqual([])
   })
 })
+
+describe('CartDocumentObserver - baseline re-advances to committed rev (GAP-03-B)', () => {
+  const storageKey = 'test:proj1:production:default:user-alice'
+  const publishedId = 'doc-gap-b'
+  const draftId = 'drafts.doc-gap-b'
+  const preCommitRev = 'rev-pre'
+  const committedRev = 'rev-committed'
+
+  function makeGapBTrackedItem() {
+    return {
+      publishedId,
+      draftId,
+      documentType: 'article',
+      addedRev: preCommitRev,
+      baselineRev: preCommitRev,
+      changedUnderneath: false,
+      isNew: false,
+      addedAt: '2026-01-01T00:00:00.000Z',
+    }
+  }
+
+  function makeGapBEditState(draftRev: string) {
+    return {
+      id: publishedId,
+      type: 'article',
+      draft: {
+        _id: draftId,
+        _rev: draftRev,
+        _type: 'article',
+        _createdAt: '',
+        _updatedAt: '',
+        content: 'some content',
+      },
+      published: null,
+      version: null,
+      liveEdit: false,
+      liveEditSchemaType: false,
+      ready: true,
+      transactionSyncLock: null,
+    }
+  }
+
+  it('re-advances baselineRev to the committed rev when the committed rev arrives in a later editState emission', async () => {
+    vi.mocked(readCart).mockReturnValue([makeGapBTrackedItem()])
+
+    // Multi-emission editState subject — models real two-phase timing where:
+    // (a) initial emission carries pre-commit rev (populates editStateRef.current)
+    // (b) later emission carries the committed rev after the mutation lands on the server
+    const editStateSubject = makeTestSubject<ReturnType<typeof makeGapBEditState>>()
+    const eventSubject = makeTestSubject<EventPayload>()
+
+    const documentStore = {
+      pair: {
+        documentEvents: vi.fn(() => eventSubject.asObservable()),
+        editState: vi.fn(() => editStateSubject.asObservable()),
+      },
+    } as unknown as ReturnType<typeof useDocumentStore>
+
+    mockUseWorkspace.mockReturnValue(makeWorkspace())
+    mockUseCurrentUser.mockReturnValue(makeCurrentUser())
+    mockUseDocumentStore.mockReturnValue(documentStore)
+    mockUseSchema.mockReturnValue({} as ReturnType<typeof useSchema>)
+
+    const CartDocumentObserver = makeCartDocumentObserver()
+    const renderDefault = vi.fn(() => <div>pane</div>)
+
+    render(
+      <CartDocumentObserver {...{documentId: draftId, documentType: 'article', renderDefault}} />,
+    )
+
+    const {getCartStore} = await import('../CartDocumentObserver')
+    const cartStore = getCartStore(storageKey)
+    const ownByCurrentUserSpy = vi.spyOn(cartStore, 'ownByCurrentUser')
+
+    // Phase (a): initial ready editState with pre-commit rev populates editStateRef.current
+    await act(async () => {
+      editStateSubject.next(makeGapBEditState(preCommitRev))
+      await new Promise<void>((resolve) => setTimeout(resolve, 10))
+    })
+
+    // Local mutation event fires — at this moment editStateRef.current still holds pre-commit rev
+    await act(async () => {
+      eventSubject.next({
+        type: 'mutation',
+        origin: 'local',
+        document: {
+          _id: draftId,
+          _rev: preCommitRev,
+          _type: 'article',
+          title: 'edited content',
+        },
+      })
+      await new Promise<void>((resolve) => setTimeout(resolve, 10))
+    })
+
+    // Phase (b): later editState emission carrying the committed rev
+    await act(async () => {
+      editStateSubject.next(makeGapBEditState(committedRev))
+      await new Promise<void>((resolve) => setTimeout(resolve, 10))
+    })
+
+    // The stored baseline must equal the committed rev, not the pre-commit rev.
+    // Without the GAP-03-B fix, this assertion fails because the baseline remains 'rev-pre'.
+    const trackedItem = cartStore.getItems().find((item) => item.publishedId === publishedId)
+    expect(trackedItem?.baselineRev).toBe(committedRev)
+
+    // ownByCurrentUser must have been called with the committed rev (not just the pre-commit rev)
+    expect(ownByCurrentUserSpy).toHaveBeenCalledWith(publishedId, committedRev)
+  })
+
+  it('does NOT advance baselineRev when a bare editState rev change arrives without a preceding local mutation (remote-isolation invariant)', async () => {
+    vi.mocked(readCart).mockReturnValue([makeGapBTrackedItem()])
+
+    const editStateSubject = makeTestSubject<ReturnType<typeof makeGapBEditState>>()
+    const eventSubject = makeTestSubject<EventPayload>()
+
+    const documentStore = {
+      pair: {
+        documentEvents: vi.fn(() => eventSubject.asObservable()),
+        editState: vi.fn(() => editStateSubject.asObservable()),
+      },
+    } as unknown as ReturnType<typeof useDocumentStore>
+
+    mockUseWorkspace.mockReturnValue(makeWorkspace())
+    mockUseCurrentUser.mockReturnValue(makeCurrentUser())
+    mockUseDocumentStore.mockReturnValue(documentStore)
+    mockUseSchema.mockReturnValue({} as ReturnType<typeof useSchema>)
+
+    const CartDocumentObserver = makeCartDocumentObserver()
+    const renderDefault = vi.fn(() => <div>pane</div>)
+
+    render(
+      <CartDocumentObserver {...{documentId: draftId, documentType: 'article', renderDefault}} />,
+    )
+
+    const {getCartStore} = await import('../CartDocumentObserver')
+    const cartStore = getCartStore(storageKey)
+
+    // Initial editState with pre-commit rev
+    await act(async () => {
+      editStateSubject.next(makeGapBEditState(preCommitRev))
+      await new Promise<void>((resolve) => setTimeout(resolve, 10))
+    })
+
+    // Local mutation + committed rev settling — establishes baseline at committedRev
+    await act(async () => {
+      eventSubject.next({
+        type: 'mutation',
+        origin: 'local',
+        document: {_id: draftId, _rev: preCommitRev, _type: 'article', title: 'edited content'},
+      })
+      await new Promise<void>((resolve) => setTimeout(resolve, 10))
+    })
+
+    await act(async () => {
+      editStateSubject.next(makeGapBEditState(committedRev))
+      await new Promise<void>((resolve) => setTimeout(resolve, 10))
+    })
+
+    // Confirm baseline is at committedRev after the local-edit cycle
+    const itemAfterLocalEdit = cartStore.getItems().find((item) => item.publishedId === publishedId)
+    expect(itemAfterLocalEdit?.baselineRev).toBe(committedRev)
+
+    // Now emit another editState with a new rev WITHOUT any local mutation event preceding it.
+    // This models a remote author's change landing while the doc is open.
+    // The re-advance must NOT fire — the pending marker was cleared by the committed-rev emission.
+    const remoteRev = 'rev-remote'
+    await act(async () => {
+      editStateSubject.next(makeGapBEditState(remoteRev))
+      await new Promise<void>((resolve) => setTimeout(resolve, 10))
+    })
+
+    const itemAfterRemoteEditState = cartStore
+      .getItems()
+      .find((item) => item.publishedId === publishedId)
+    expect(itemAfterRemoteEditState?.baselineRev).toBe(committedRev)
+    expect(itemAfterRemoteEditState?.baselineRev).not.toBe(remoteRev)
+  })
+})
